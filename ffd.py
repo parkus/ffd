@@ -8,8 +8,8 @@ import powerlaw
 
 class Flares(object):
     """
-    A Flares object contains the energy (or other defining metric) of flares from a compendium of datasets (
-    specifically FlareDataset objects).
+    A Flares object contains the energy (or other defining metric) of flares from a compendium of datasets
+    (specifically FlareDataset objects).
 
     Attributes
     ----------
@@ -18,17 +18,17 @@ class Flares(object):
     n_total : int
         Total number of flares summed across all datasets.
     expt_total : float
-        expt_total: Total exposure time summed across all datasets.,
+        Total exposure time summed across all datasets.
     e : array
-        Flare energies (or other defining metric) concatenated from all datasets and sorted in value.,
+        Flare energies (or other defining metric) concatenated from all datasets and sorted in value.
     expt_detectable : array
         The total exposure time in which the event stored in "e" could have been detected. (I.e. the sum of the
-        exposure times of datasets where the detection limit was below e.),
+        exposure times of datasets where the detection limit was below e.)
     cumfreq_naive : array
-        Cumulative frequency of for events >=e assuming expt_total for all.,
+        Cumulative frequency of for events >=e assuming expt_total for all.
     cumfreq_corrected : array
         Cumulative frequency for events >=e accounting for differences in total time in which such events could have
-        been detected.}
+        been detected.
     """
 
     def __init__(self, datasets):
@@ -171,9 +171,8 @@ class Flares(object):
 
         Returns
         -------
-        sampler : PowerLawMCMC object
-            A class containing an emcee sampler of the posterior ditribution of the fit parameters and supporting
-            methods. The sampler is returned with nsteps already taken.
+        chain : array
+            MCMC chain of a,C values, given as an [nsteps,2] array. Hence a,C = chain.T.
         """
 
         a_prior, logC_prior = map(_prior_boilerplate, (a_prior, logC_prior))
@@ -191,21 +190,29 @@ class Flares(object):
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
         sampler.run_mcmc(pos, nsteps)
 
-        return PowerLawMCMC(sampler, a_prior=a_prior, logC_prior=logC_prior)
+        return sampler.flatchain
 
-    def constrain_flare_energy_budget_mcmc(self, emin, emax, **fit_kws):
+    def mcmc_energy_budget(self, emin, emax, fmin=None, fmax=None, chain=None, **fit_kws):
         """
         A convenience function to uses MCMC sampling to constrain the time-averaged energy resulting from flares
         assuming a power law distribution fit to the data. If the equivalent duration is used as the flare metric
         (the e attribute of each FlareDataset object), then this amounts to the ratio of energy emitted by flares
         versus quiescence over time.
 
+        This is mainly convenience code for my 2018 flare paper :)
+
         Parameters
         ----------
         emin : float
-            minimum flare energy (or whatever metric was used when defining the FlareDatasets) to consider. Must be >0.
+            minimum flare energy (or whatever metric was used when defining the FlareDatasets) to consider. Must be >=0.
         emax : float
             similar to emin. Can use np.inf.
+        fmin : float
+            minimum flare frequency to consider (equivalent to max energy, but note that the relationship between
+            the two depends on a and C). Must be >=0. Overrides emax.
+        fmax : float
+            max flare frequency to consider. Can be np.inf. Overrides emin.
+        chain : None
         fit_kws :
             keyword arguments to supply to the mcmc_powerlaw method when it is called
 
@@ -214,9 +221,15 @@ class Flares(object):
         p, err_neg, err_pos
 
         """
-        fit = self.mcmc_powerlaw(**fit_kws)
-        p = fit.chain('time_average', emin, emax)
-        return utils.error_bars(p)
+        if chain is None:
+            chain = self.mcmc_powerlaw(**fit_kws)
+        a, C = chain
+
+        if fmin is not None:
+            emax = powerlaw.energy(a, C, fmin)
+        if fmax is not None:
+            emin = powerlaw.energy(a, C, fmax)
+        return powerlaw.time_average(a, C, emin, emax)
 
 
 
@@ -281,179 +294,6 @@ class FlareDataset(object):
             log = np.log
             elim = self.elim
             return -lam + n*log(lam) - log(factorial(n)) + n*log((a-1)/elim) - a*np.sum(log(self.e/elim))
-
-
-
-
-class PowerLawMCMC(object):
-    """
-    PowerLawMCMC is just an emcee sampler with some helper functions specific to a power law fit to a flare FFD.
-
-    Attributes
-    ----------
-    sampler : emcee sampler object
-    a_prior : function or 0
-        the function defining the prior probability distribution on a. Zero if no prior.
-    logC_prior : function or 0
-        as with a_prior. logC used becuase posterior tends to be normally distributed in a and log10(C).
-    burnin : int
-        number of steps to consider burnin
-    confidence_interval : float
-        when defining erro bars pick them so that the value has this probability of being within them. Default is
-        0.683 for 1-sigma errors.
-    upper_limit_interval : float
-        as with confidence_interval, but if only an upper limit can be specified
-    is_good_fit : boolean
-        True if best-fit values (not upper limits) were found for a and C.
-    """
-
-    def __init__(self, mcmc_sampler, a_prior, logC_prior, burnin=50, confidence_interval=0.683,
-                 upper_limit_interval=0.95):
-        """
-        Create a PowerLawMCMC object. Intended to be created by a call to Flares.mcmc_powerlaw.
-        """
-        self.sampler = mcmc_sampler
-        self.a_prior = a_prior
-        self.logC_prior = logC_prior
-        self.burnin = burnin
-        self.confidence_interval = confidence_interval
-        self.upper_limit_interval = upper_limit_interval
-        self.update_best_fit_values()
-
-    #region checking upper limits
-    def is_lim(self, name):
-        """
-        Check if a the parameter given as name is an upper limit.
-        """
-        return np.isnan(getattr(self, name)[0])
-
-    def _get_is_good_fit(self):
-        aislim, Cislim = map(self.is_lim, ['a', 'C'])
-        return (not aislim) and (not Cislim)
-    is_good_fit = property(_get_is_good_fit)
-
-    def check_fit_is_good(self):
-        """
-        Check if the fit is "good," meaning that best-fit values (not upper limits) were found for a and C. Raise a
-        ValueError if it isn't.
-        """
-        if not self.is_good_fit:
-            raise ValueError('Either a or C of the PowerLawMCMC fit is just an upper limit, so cannot compute.')
-    #endregion
-
-    # region powerlaw computations
-    # I thought about abstracting here to make any function in powerlaw atuomatically work, but then they
-    # introspection wn't work, so I think better just to explicitly duplicate
-    def _compute_from_powerlaw(self, func, *args, **kwargs):
-        self.check_fit_is_good()
-        return getattr(powerlaw, func)(self.a[0], self.C[0], *args, **kwargs)
-
-    def time_average(self, emin, emax):
-        """
-        Average output of events with energies in the range [emin, emax] for a power-law of the form
-
-        f = C*e**-a
-
-        to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
-
-        If the power law is for flare equivalent durations, this amounts to the ratio of energy output in flares versus
-        quiesence. If the power law is for flare energies, it is the time-averaged energy output of flares (units of power).
-        """
-        return self._compute_from_powerlaw(emin, emax)
-
-    def cumulative_frequency(self, emin):
-        """
-        Average output of events with energies in the range [emin, emax] for a power-law of the form
-
-        f = C*e**-a
-
-        to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
-
-        If the power law is for flare equivalent durations, this amounts to the ratio of energy output in flares versus
-        quiesence. If the power law is for flare energies, it is the time-averaged energy output of flares (units of power).
-        """
-        return self._compute_from_powerlaw(emin)
-
-    def differential_frequency(self, e):
-        """
-        Differential frequency of events with energies (or other metric) greater than e for a power-law of the form
-
-        f = C*e**-a
-
-        to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
-        """
-        return self._compute_from_powerlaw(e)
-    #endregion
-
-    #region mcmc and fit management
-    def run_mcmc(self, nsteps):
-        """
-        Advance the MCMC walkers by nsteps and update best fit values for a and C.
-        """
-        self.sampler.run_mcmc(None, nsteps)
-        self.update_best_fit_values()
-
-    def _get_fit_value(self, name):
-        chain = getattr(self, name)
-        return utils.error_bars(chain, self.confidence_interval, self.upper_limit)
-
-    def update_best_fit_values(self):
-        """
-        Update the best-fit values for a and C.
-        """
-        self.a, self.C = map(self._get_fit_value, ['a', 'C'])
-    #endregion
-
-    def samples(self, name_or_function, *args, **kwargs):
-        """
-        Compute values from the chains of MCMC steps. This is particularly useful for examining the posterior of
-        derived values, like the flare energy budget.
-
-        Parameters
-        ----------
-        name_or_function : str or function
-            Either a string naming the parameter return samples for ('a', 'C', or the name of afunction defined in
-            powerlaw.py) or a user-defined function that takes vectors of a and C values as arguments.
-        args :
-            arguments to be passed along to the called function
-        kwargs :
-            as with args
-
-        Returns
-        -------
-        samples : array
-            an array of values of the function for each MCMC step
-        """
-        if type(name_or_function) is str:
-            if name_or_function == 'a':
-                return self.sampler.chain[:, self.burnin:, 0]
-            if name_or_function == 'C':
-                return self.sampler.chain[:, self.burnin:, 1]
-            else:
-                getattr(powerlaw, name_or_function)(self.chain('a'), self.chain('C'), *args, **kwargs)
-        elif hasattr(name_or_function, '__call__'):
-            return name_or_function(self.chain('a'), self.chain('C'), *args, **kwargs)
-
-    def plot(self, emin, emax, *args, **kwargs):
-        """
-        Plot the power-law best fit line between emin and emax.
-
-        Parameters
-        ----------
-        emin : float
-        emax : float
-        args :
-            passed to matplotlib plot function
-        kwargs :
-            passed to matplotlib plot function
-
-        Returns
-        -------
-        line : matplotlib line object
-        """
-        ax = kwargs.get('ax', plt.gca())
-        fmin, fmax = map(self.cumulative_frequency, [emin, emax])
-        return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)
 
 
 
