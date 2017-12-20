@@ -1,9 +1,9 @@
 import numpy as np
 import emcee as emcee
-import utils as utils
 from math import factorial
 from matplotlib import pyplot as plt
 import powerlaw
+from scipy.special import gammaln
 
 
 class Flares(object):
@@ -49,17 +49,16 @@ class Flares(object):
         self.datasets = datasets
 
         # totals
-        self.n_total = sum(data.n for data in datasets)
-        self.expt_total = np.sum(data.expt for data in datasets)
+        self.n_total = sum([data.n for data in datasets])
+        self.expt_total = np.sum([data.expt for data in datasets])
 
         # event energies concatenated from all flare datasets
-        self.e = np.concatenate(data.e for data in datasets)
+        self.e = np.concatenate([data.e for data in datasets])
         self.e = np.sort(self.e)
 
-
         # exposure time in which an event of energy e *could* have been detected
-        expts = np.array(data.expt for data in datasets)
-        elims = np.array(data.elim for data in datasets)
+        expts = np.array([data.expt for data in datasets])
+        elims = np.array([data.elim for data in datasets])
         isort = np.argsort(elims)
         elims, expts = [a[isort] for a in [elims, expts]]
         cumexpts = np.cumsum(expts)
@@ -67,7 +66,7 @@ class Flares(object):
         self.expt_detectable = cumexpts[i_lims-1]
 
         # cumulative frequencies ignoring differences in detection limits and correcting for them
-        cumno = np.arange(self.n_total + 1)[::-1]
+        cumno = np.arange(self.n_total)[::-1] + 1
         self.cumfreq_naive = cumno / self.expt_total
         self.cumfreq_corrected = cumno / self.expt_detectable
 
@@ -112,14 +111,15 @@ class Flares(object):
         a, aerr: floats
             max likelihood power-law index and error
         """
-        e = np.concatenate(data.e for data in self.datasets)
-        elim = np.concatenate([data.elim]*data.n for data in self.datasets)
+        e = np.concatenate([data.e for data in self.datasets])
+        elim = np.concatenate([[data.elim]*data.n for data in self.datasets])
         N = self.n_total
         a = N / (np.sum(np.log(e / elim)))
+        assert a > 0
         aerr = N * a / (N - 1) / np.sqrt(N - 2)
         return a, aerr
 
-    def loglike_powerlaw(self, params):
+    def loglike_powerlaw(self, params, e_uplim):
         """
         Returns the log-likelihood of a power law fit of the form
 
@@ -140,9 +140,10 @@ class Flares(object):
             Log-likelihood of the fit to the flare distribution.
 
         """
-        return np.sum(data.loglike_powerlaw(params) for data in self.datasets)
+        return np.sum(data.loglike_powerlaw(params, e_uplim) for data in self.datasets)
 
-    def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=None, logC_prior=None, a_init=None, C_init=None):
+    def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
+                      e_uplim=np.inf):
         """
         Generate a PowerLawMCMC for a power law fit of the form
 
@@ -178,13 +179,11 @@ class Flares(object):
         a_prior, logC_prior = map(_prior_boilerplate, (a_prior, logC_prior))
 
         def loglike(params):
-            return a_prior(params[0]) + logC_prior(np.log10(params[1])) + self.loglike_powerlaw(params)
+            return a_prior(params[0]) + logC_prior(np.log10(params[1])) + self.loglike_powerlaw(params, e_uplim)
 
-        if a_init is None:
-            a_init = self.fit_powerlaw_dirty()[0]
         if C_init is None:
-            elim_mean = np.mean(data.elim for data in self.datasets)
-            C_init = self.n / self.expt_total * elim_mean ** a_init
+            elim_mean = np.mean([data.elim for data in self.datasets])
+            C_init = self.n_total / self.expt_total * elim_mean ** a_init
 
         pos = [[a_init, C_init] * np.random.normal(1, 1e-3, size=2) for _ in range(nwalkers)]
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
@@ -255,7 +254,7 @@ class FlareDataset(object):
         self.e = np.array(flare_energies)
         self.n = len(flare_energies)
 
-    def loglike_powerlaw(self, params):
+    def loglike_powerlaw(self, params, e_uplim):
         """
         Returns the log-likelihood of a power law fit of the form
 
@@ -277,7 +276,7 @@ class FlareDataset(object):
 
         """
         a, C = params
-        if a < 0 or C < 0:
+        if a <= 0 or C < 0:
             return -np.inf
         if C == 0:
             if self.n > 0:
@@ -285,15 +284,16 @@ class FlareDataset(object):
             else:
                 return 0.0
 
-        lam = self.expt * C * self.elim ** (1 - a)
+        a = a + 1  # supplying cumulative but want regular exponent
+        lam = self.expt * C * (self.elim ** (1 - a) - e_uplim ** (1 - a))
         if self.n == 0:
             return -lam
         else:
-            a = a + 1  # supplying cumulative but want regular exponent
             n = self.n
             log = np.log
             elim = self.elim
-            return -lam + n*log(lam) - log(factorial(n)) + n*log((a-1)/elim) - a*np.sum(log(self.e/elim))
+            # note log(gamma(n+1)) = log(n!)
+            return -lam + n*log(lam) - gammaln(n+1) + n*log((a-1)/elim) - a*np.sum(log(self.e/elim))
 
 
 
@@ -302,15 +302,15 @@ def _loglike_from_interval(x, interval):
     if x < interval[0] or x > interval[-1]:
         return -np.inf
     else:
-        return 1.0
+        return 0.0
 
 
 def _prior_boilerplate(prior):
     if prior is None:
-        return 0.0
-    elif type(prior) is not function:
+        return lambda x: 0.0
+    elif not hasattr(prior, '__call__'):
         try:
-            return _loglike_from_interval(prior)
+            return lambda x: _loglike_from_interval(x, prior)
         except TypeError:
             raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
     else:
