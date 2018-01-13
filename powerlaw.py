@@ -44,7 +44,7 @@ def energy(a, C, f):
     return (f/C)**(1/-a)
 
 
-def plot(self, a, C, emin, emax, *args, **kwargs):
+def plot(a, C, emin, emax, *args, **kwargs):
     """
     Plot a power-law line of the form f = C*e**-a between emin and emax.
 
@@ -64,5 +64,5 @@ def plot(self, a, C, emin, emax, *args, **kwargs):
     line : matplotlib line object
     """
     ax = kwargs.get('ax', plt.gca())
-    fmin, fmax = map(self.cumulative_frequency, [emin, emax])
+    fmin, fmax = [cumulative_frequency(a, C, e) for e in  [emin, emax]]
     return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)
