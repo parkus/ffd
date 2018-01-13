@@ -179,7 +179,12 @@ class Flares(object):
         a_prior, logC_prior = map(_prior_boilerplate, (a_prior, logC_prior))
 
         def loglike(params):
-            return a_prior(params[0]) + logC_prior(np.log10(params[1])) + self.loglike_powerlaw(params, e_uplim)
+            a, C = params
+            if C <= 0:
+                return -np.inf
+            if a <= 0:
+                return -np.inf
+            return a_prior(a) + logC_prior(np.log10(C)) + self.loglike_powerlaw(params, e_uplim)
 
         if C_init is None:
             elim_mean = np.mean([data.elim for data in self.datasets])
