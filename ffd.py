@@ -67,8 +67,9 @@ class Flares(object):
 
         # cumulative frequencies ignoring differences in detection limits and correcting for them
         cumno = np.arange(self.n_total)[::-1] + 1
-        self.cumfreq_naive = cumno / self.expt_total
-        self.cumfreq_corrected = cumno / self.expt_detectable
+        self.cumfreq_naive = (cumno / self.expt_total)
+        cumno_corrected = np.cumsum(1. / self.expt_detectable[::-1])[::-1] * self.expt_total
+        self.cumfreq_corrected = cumno_corrected / self.expt_total
 
     def plot_ffd(self, *args, **kwargs):
         """
