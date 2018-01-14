@@ -61,14 +61,17 @@ class Flares(object):
         elims = np.array([data.elim for data in datasets])
         isort = np.argsort(elims)
         elims, expts = [a[isort] for a in [elims, expts]]
-        cumexpts = np.cumsum(expts)
-        i_lims = np.searchsorted(elims, self.e, side='right')
-        self.expt_detectable = cumexpts[i_lims-1]
+        self.expt_at_lim = np.cumsum(expts)
+        self.elims, self.expts = elims, expts
+        count, _ = np.histogram(self.e, np.append(elims, self.e[-1]+1))
+        self.n_detected = np.cumsum(count[::-1])[::-1]
 
         # cumulative frequencies ignoring differences in detection limits and correcting for them
         cumno = np.arange(self.n_total)[::-1] + 1
         self.cumfreq_naive = (cumno / self.expt_total)
-        cumno_corrected = np.cumsum(1. / self.expt_detectable[::-1])[::-1] * self.expt_total
+        i_lims = np.searchsorted(elims, self.e, side='right')
+        expt_detectable = self.expt_at_lim[i_lims - 1]
+        cumno_corrected = np.cumsum(1. / expt_detectable[::-1])[::-1] * self.expt_total
         self.cumfreq_corrected = cumno_corrected / self.expt_total
 
     def plot_ffd(self, *args, **kwargs):
@@ -96,7 +99,7 @@ class Flares(object):
         ax = kwargs.get('ax', plt.gca())
         corrected = kwargs.get('corrected', True)
         cf = self.cumfreq_corrected if corrected else self.cumfreq_naive
-        line, = ax.step(self.e, cf, where='post', **kwargs)
+        line, = ax.step(self.e, cf, where='pre', **kwargs)
         return line
 
     def fit_powerlaw_dirty(self):
@@ -120,7 +123,7 @@ class Flares(object):
         aerr = N * a / (N - 1) / np.sqrt(N - 2)
         return a, aerr
 
-    def loglike_powerlaw(self, params, e_uplim):
+    def loglike_powerlaw(self, params, e_uplim=np.inf):
         """
         Returns the log-likelihood of a power law fit of the form
 
@@ -141,7 +144,24 @@ class Flares(object):
             Log-likelihood of the fit to the flare distribution.
 
         """
-        return np.sum(data.loglike_powerlaw(params, e_uplim) for data in self.datasets)
+
+        # I think this is not just a matter of summing the loglikes of the individual datasets because for a poisson
+        # distribution, the prob of detecting some number of events over a given timeframe cannot be decomposed into a
+        # product of the probabilities over pieces of that timeframe
+        #
+        # but I think I can decompose into event energy intervals
+        a, C = params
+        elims, expts = self.elims, self.expt_at_lim
+        elims = np.append(elims, e_uplim)
+        lams = C*expts*(elims[:-1]**-a - elims[1:]**-a) # expected no of events
+        poisson_loglikes = -lams + self.n_detected*np.log(lams) - gammaln(self.n_detected+1)
+        poisson_loglike = np.sum(poisson_loglikes)
+
+        # now the events also have to account for different detection threshholds, but assume the same slope...
+        # here it is just the product of the probs for each dataset, so I can sum the loglikes
+        power_loglike = np.sum([d.loglike_powerindex(params, e_uplim=e_uplim) for d in self.datasets])
+
+        return np.sum(poisson_loglike + power_loglike)
 
     def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
                       e_uplim=np.inf):
@@ -255,12 +275,14 @@ class FlareDataset(object):
             Energies (or other metric like equivalent duration, peak flux, ...) of the detected events. Use an empty
             list (default) if no events were detected but the dataset is still being included.
         """
+        if np.any(flare_energies < detection_limit):
+            raise ValueError('Detections below the detection limit don\'t make sense, but there appears to be one.')
         self.elim = detection_limit
         self.expt = exposure_time
         self.e = np.array(flare_energies)
         self.n = len(flare_energies)
 
-    def loglike_powerlaw(self, params, e_uplim):
+    def loglike_powerlaw(self, params, e_uplim=np.inf):
         """
         Returns the log-likelihood of a power law fit of the form
 
@@ -281,27 +303,28 @@ class FlareDataset(object):
             log likelihood of powerlaw fit
 
         """
+        return self.loglike_powerlaw(params) + self.loglike_rate(params, e_uplim)
+
+    def loglike_rate(self, params, e_uplim=np.inf):
         a, C = params
-        if a <= 0 or C < 0:
-            return -np.inf
-        if C == 0:
-            if self.n > 0:
-                return -np.inf
-            else:
-                return 0.0
+        lam = self.expt * C * (self.elim ** -a - e_uplim ** -a)
+        # note log(gamma(n+1)) = log(n!)
+        return -lam + self.n*np.log(lam) - gammaln(self.n+1)
 
-        a = a + 1  # supplying cumulative but want regular exponent
-        lam = self.expt * C * (self.elim ** (1 - a) - e_uplim ** (1 - a))
+    def loglike_powerindex(self, params, e_uplim=np.inf):
         if self.n == 0:
-            return -lam
-        else:
-            n = self.n
-            log = np.log
-            elim = self.elim
-            # note log(gamma(n+1)) = log(n!)
-            return -lam + n*log(lam) - gammaln(n+1) + n*log((a-1)/elim) - a*np.sum(log(self.e/elim))
+            return 0
+        a, C = params
+        a = a + 1 # want exponent for proper pdf not cumulative function for this
+        n = self.n
+        elim = self.elim
+        loglike = n * np.log((a - 1) / (elim**(1-a) - e_uplim**(1-a))) - a * np.sum(self.e) + _general_prior()
 
-
+        # just a check, can be removed eventually TODO
+        if e_uplim != np.inf:
+            loglike2 = n * np.log((a - 1) / (elim) - a * np.sum(np.log(self.e / elim)) + _general_prior(params)
+            assert np.allclose(loglike, loglike2)
+        return loglike
 
 
 def _loglike_from_interval(x, interval):
@@ -321,3 +344,14 @@ def _prior_boilerplate(prior):
             raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
     else:
         return prior
+
+
+def _general_prior(params):
+    a, C = params
+    if a <= 0 or C < 0:
+        return -np.inf
+    if C == 0:
+        if self.n > 0:
+            return -np.inf
+        else:
+            return 0.0
