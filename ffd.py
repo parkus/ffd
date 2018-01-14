@@ -153,15 +153,16 @@ class Flares(object):
         a, C = params
         elims, expts = self.elims, self.expt_at_lim
         elims = np.append(elims, e_uplim)
+        n = np.append(-np.diff(self.n_detected), self.n_detected[-1]) # number actually detected in each interval of limits
         lams = C*expts*(elims[:-1]**-a - elims[1:]**-a) # expected no of events
-        poisson_loglikes = -lams + self.n_detected*np.log(lams) - gammaln(self.n_detected+1)
+        poisson_loglikes = -lams + n*np.log(lams) - gammaln(n+1)
         poisson_loglike = np.sum(poisson_loglikes)
 
         # now the events also have to account for different detection threshholds, but assume the same slope...
         # here it is just the product of the probs for each dataset, so I can sum the loglikes
         power_loglike = np.sum([d.loglike_powerindex(params, e_uplim=e_uplim) for d in self.datasets])
 
-        return np.sum(poisson_loglike + power_loglike)
+        return poisson_loglike + power_loglike
 
     def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
                       e_uplim=np.inf):
@@ -318,11 +319,11 @@ class FlareDataset(object):
         a = a + 1 # want exponent for proper pdf not cumulative function for this
         n = self.n
         elim = self.elim
-        loglike = n * np.log((a - 1) / (elim**(1-a) - e_uplim**(1-a))) - a * np.sum(self.e) + _general_prior()
+        loglike = n * np.log((a - 1) / (elim**(1-a) - e_uplim**(1-a))) - a * np.sum(np.log(self.e))
 
         # just a check, can be removed eventually TODO
-        if e_uplim != np.inf:
-            loglike2 = n * np.log((a - 1) / (elim) - a * np.sum(np.log(self.e / elim)) + _general_prior(params)
+        if e_uplim == np.inf:
+            loglike2 = n * np.log((a - 1) / elim) - a * np.sum(np.log(self.e / elim))
             assert np.allclose(loglike, loglike2)
         return loglike
 
@@ -344,14 +345,3 @@ def _prior_boilerplate(prior):
             raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
     else:
         return prior
-
-
-def _general_prior(params):
-    a, C = params
-    if a <= 0 or C < 0:
-        return -np.inf
-    if C == 0:
-        if self.n > 0:
-            return -np.inf
-        else:
-            return 0.0
