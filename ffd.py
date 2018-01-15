@@ -150,19 +150,28 @@ class Flares(object):
         # product of the probabilities over pieces of that timeframe
         #
         # but I think I can decompose into event energy intervals
+        # a, C = params
+        # elims, expts = self.elims, self.expt_at_lim
+        # elims = np.append(elims, e_uplim)
+        # n = np.append(-np.diff(self.n_detected), self.n_detected[-1]) # number actually detected in each interval of limits
+        # lams = C*expts*(elims[:-1]**-a - elims[1:]**-a) # expected no of events
+        # poisson_loglikes = -lams + n*np.log(lams) - gammaln(n+1)
+        # poisson_loglike = np.sum(poisson_loglikes)
+        #
+        # # now the events also have to account for different detection threshholds, but assume the same slope...
+        # # here it is just the product of the probs for each dataset, so I can sum the loglikes
+        # power_loglike = np.sum([d.loglike_powerindex(params, e_uplim=e_uplim) for d in self.datasets])
+
+        # return poisson_loglike + power_loglike
+
         a, C = params
-        elims, expts = self.elims, self.expt_at_lim
-        elims = np.append(elims, e_uplim)
-        n = np.append(-np.diff(self.n_detected), self.n_detected[-1]) # number actually detected in each interval of limits
-        lams = C*expts*(elims[:-1]**-a - elims[1:]**-a) # expected no of events
-        poisson_loglikes = -lams + n*np.log(lams) - gammaln(n+1)
-        poisson_loglike = np.sum(poisson_loglikes)
-
-        # now the events also have to account for different detection threshholds, but assume the same slope...
-        # here it is just the product of the probs for each dataset, so I can sum the loglikes
-        power_loglike = np.sum([d.loglike_powerindex(params, e_uplim=e_uplim) for d in self.datasets])
-
-        return poisson_loglike + power_loglike
+        xmin = np.concatenate([[d.elim]*d.n for d in self.datasets])
+        expt = np.concatenate([[d.expt]*d.n for d in self.datasets])
+        N = np.concatenate([[d.n]*d.n for d in self.datasets])
+        x = np.concatenate([d.e for d in self.datasets])
+        a = a + 1  # supplying cumulative but want regular exponent
+        lam = expt * C * xmin ** (1 - a)
+        return np.sum(-(lam - gammaln(N + 1)) / N + np.log(lam) + np.log((a - 1) / xmin) - a * np.log(x / xmin))
 
     def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
                       e_uplim=np.inf):
