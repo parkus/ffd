@@ -54,7 +54,7 @@ class OutOfRange(Exception):
     pass
 
 
-def error_bars(x, interval=0.683, upper_limit=0.95):
+def error_bars(x, x_ml=None, interval=0.683, upper_limit=0.95):
     """
     Find the most likely value and error bars (confidence interval) of a parameter based on random samples (as from
     an MCMC parameter search). If a most likely value with a confidence interval is not well defined, return an upper
@@ -64,6 +64,10 @@ def error_bars(x, interval=0.683, upper_limit=0.95):
     ----------
     x : array-like
         The randomly sampled data for which to find a most likely value and error bars.
+    x_ml : float
+        Max-likelihood value of x. Useful when this value was found with, say, scipy.optimize.minimize and now you
+        just want to get the error bars to either side of that value, even though the MCMC sampling might show a
+        different peak.
     interval : float
         The width of the confidence interval (such as 0.683 for 1-sigma error bars).
     upper_limit : float
@@ -91,7 +95,8 @@ def error_bars(x, interval=0.683, upper_limit=0.95):
 
 
     x = _np.sort(x)
-    x_mode = mode_halfsample(x, presorted=True)
+    if x_ml is None:
+        x_ml = mode_halfsample(x, presorted=True)
 
     # compute the cumulative integral based on the sorted samples
     # cdf will be a step function, jumping up at each x
@@ -108,7 +113,7 @@ def error_bars(x, interval=0.683, upper_limit=0.95):
     # try to find each end of the confidence interval
     # if the mode of the distribution is too far from the median such that the confidence interval cannot be reached,
     # then treat as an upper or lower limit
-    i_mode = _np.searchsorted(x, x_mode)
+    i_mode = _np.searchsorted(x, x_ml)
     c_mode = (cdf[i_mode-1] + cdf[i_mode])/2.0
 
     # try lower interval
@@ -126,4 +131,4 @@ def error_bars(x, interval=0.683, upper_limit=0.95):
         return _np.nan, x_lim, _np.nan
 
     # if neither encountered a limit return the interval
-    return x_mode, x_min - x_mode, x_max - x_mode
+    return x_ml, x_min - x_ml, x_max - x_ml
