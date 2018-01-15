@@ -1,9 +1,9 @@
 import numpy as np
 import emcee as emcee
-from math import factorial
 from matplotlib import pyplot as plt
 import powerlaw
 from scipy.special import gammaln
+from scipy.optimize import minimize
 
 
 class Flares(object):
@@ -70,6 +70,18 @@ class Flares(object):
         self.cumfreq_naive = (cumno / self.expt_total)
         cumno_corrected = np.cumsum(1. / self.expt_detectable[::-1])[::-1] * self.expt_total
         self.cumfreq_corrected = cumno_corrected / self.expt_total
+
+        # collect info from datasets into arrays for fast power law loglike computations
+        expt, elim, n, e = [], [], [], []
+        for dataset in self.datasets:
+            list_len = dataset.n if dataset.n > 0 else 1
+            expt.extend([dataset.expt]*list_len)
+            elim.extend([dataset.elim]*list_len)
+            n.extend([dataset.n]*list_len)
+            # this will make loglike_power evaluate to 0 if there were no flares detected in the dataset
+            e.extend(dataset.e.tolist() if dataset.n > 0 else [dataset.elim])
+        expt, elim, n, e = map(np.array, [expt, elim, n, e])
+        self.loglike_vectors = {'expt': expt, 'elim': elim, 'n': n, 'e': e}
 
     def plot_ffd(self, *args, **kwargs):
         """
@@ -141,9 +153,48 @@ class Flares(object):
             Log-likelihood of the fit to the flare distribution.
 
         """
-        return np.sum(data.loglike_powerlaw(params, e_uplim) for data in self.datasets)
+        a, C = params
+        if C <= 0:
+            return -np.inf
+        if a <= 0:
+            return -np.inf
 
-    def mcmc_powerlaw(self, nwalkers=50, nsteps=10000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
+        expt, elim, n, e = [self.loglike_vectors[key] for key in ['expt', 'elim', 'n', 'e']]
+
+        a = a + 1  # supplying cumulative but want regular exponent
+
+        lam = expt * C * (elim ** (1 - a) - e_uplim ** (1 - a))
+        loglike_poisson = -lam + n * np.log(lam) - gammaln(n + 1)
+
+        loglike_power = n * np.log((a - 1) / elim) - a * np.sum(np.log(e / elim))
+
+        return loglike_poisson + loglike_power
+
+    def _loglike_boiler(self, a_prior, logC_prior, e_uplim):
+        a_prior, logC_prior = map(_prior_boilerplate, (a_prior, logC_prior))
+
+        def loglike(params):
+            a, C = params
+            return self.loglike_powerlaw(params, e_uplim=e_uplim) + a_prior(a) + logC_prior(np.log10(C))
+        return loglike
+
+    def _C_guess(self, a_guess):
+        elim_mean = np.mean([data.elim for data in self.datasets])
+        return self.n_total / self.expt_total * elim_mean ** a_guess
+
+    def fit_powerlaw(self, a_guess=1.0, C_guess=None, a_prior=(0,np.inf), logC_prior=None, e_uplim=np.inf):
+        loglike = self._loglike_boiler(a_prior, logC_prior, e_uplim)
+        neglike = lambda params: -loglike(params)
+
+        if C_guess is None:
+            C_guess = self._C_guess(a_guess)
+
+        result = minimize(neglike, [a_guess, C_guess], method='nelder-mead', options=dict(maxiter=1000))
+        assert np.all(np.isfinite(result.x))
+        a_ml, C_ml = result.x
+        return a_ml, C_ml
+
+    def mcmc_powerlaw(self, nwalkers=50, nsteps=1000, a_prior=(0,np.inf), logC_prior=None, a_init=1.0, C_init=None,
                       e_uplim=np.inf):
         """
         Generate a PowerLawMCMC for a power law fit of the form
@@ -165,8 +216,7 @@ class Flares(object):
         logC_prior : list or function
             Similar ot a_prior. Log10(C) is used because the C parameter tends to be normally-distributed in log space.
         a_init : float or None
-            Initial value for a to start the MCMC sampling. A small random factor will be applied. If None,
-            fit_powerlaw_dirty will be used to get an a_init.
+            Initial value for a to start the search for the max likelihood value.
         C_init : float or None
             Similar to C_init. Note that the value is *not* in log space. If None, a rough estimate based on the
             number of events detected and a_init will be used.
@@ -176,26 +226,15 @@ class Flares(object):
         chain : array
             MCMC chain of a,C values, given as an [nsteps,2] array. Hence a,C = chain.T.
         """
-
-        a_prior, logC_prior = map(_prior_boilerplate, (a_prior, logC_prior))
-
-        def loglike(params):
-            a, C = params
-            if C <= 0:
-                return -np.inf
-            if a <= 0:
-                return -np.inf
-            return a_prior(a) + logC_prior(np.log10(C)) + self.loglike_powerlaw(params, e_uplim)
+        loglike = self._loglike_boiler(a_prior, logC_prior, e_uplim)
 
         if C_init is None:
-            elim_mean = np.mean([data.elim for data in self.datasets])
-            C_init = self.n_total / self.expt_total * elim_mean ** a_init
+            C_init = self._C_guess(a_init)
 
         pos = [[a_init, C_init] * np.random.normal(1, 1e-3, size=2) for _ in range(nwalkers)]
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
         sampler.run_mcmc(pos, nsteps)
-
-        return sampler.flatchain
+        return sampler
 
     def mcmc_energy_budget(self, emin, emax, fmin=None, fmax=None, chain=None, **fit_kws):
         """
