@@ -1,6 +1,4 @@
 import numpy as np
-import emcee as emcee
-from math import factorial
 from matplotlib import pyplot as plt
 import powerlaw
 from scipy.special import gammaln
@@ -98,27 +96,6 @@ class Flares(object):
         cf = self.cumfreq_corrected if corrected else self.cumfreq_naive
         line, = ax.step(self.e, cf, where='post', **kwargs)
         return line
-
-    def fit_powerlaw_dirty(self):
-        """
-        Returns a quick-and-dirty max-likelihood power law fit of the form
-
-        f ~ e**-a
-
-        where f is the cumulative frequency of flares with energies greater than e.
-
-        Returns
-        -------
-        a, aerr: floats
-            max likelihood power-law index and error
-        """
-        e = np.concatenate([data.e for data in self.datasets])
-        elim = np.concatenate([[data.elim]*data.n for data in self.datasets])
-        N = self.n_total
-        a = N / (np.sum(np.log(e / elim)))
-        assert a > 0
-        aerr = N * a / (N - 1) / np.sqrt(N - 2)
-        return a, aerr
 
     def loglike_powerlaw(self, params, e_uplim):
         """
@@ -304,20 +281,6 @@ class FlareDataset(object):
 
 
 
-def _loglike_from_interval(x, interval):
-    if x < interval[0] or x > interval[-1]:
-        return -np.inf
-    else:
-        return 0.0
 
 
-def _prior_boilerplate(prior):
-    if prior is None:
-        return lambda x: 0.0
-    elif not hasattr(prior, '__call__'):
-        try:
-            return lambda x: _loglike_from_interval(x, prior)
-        except TypeError:
-            raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
-    else:
-        return prior
+
