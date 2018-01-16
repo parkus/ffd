@@ -58,7 +58,8 @@ class Flares(object):
         elims, expts = [a[isort] for a in [elims, expts]]
         self.expt_at_lim = np.cumsum(expts)
         self.elims, self.expts = elims, expts
-        count, _ = np.histogram(self.e, np.append(elims, self.e[-1]+1))
+        emax = max(np.max(elims), np.max(self.e))
+        count, _ = np.histogram(self.e, np.append(elims, emax+1))
         self.n_detected = np.cumsum(count[::-1])[::-1]
 
         # cumulative frequencies ignoring differences in detection limits and correcting for them

@@ -91,15 +91,18 @@ class PowerLawFit(object):
             self.a_ml = None
             self.C_ml = None
             a_init = 1.0
-            C_init = guess_C(a_init)
         else:
             self.ml_success = True
             a, C = result.x
             self.a_ml = a
             self.C_ml = C
-            a_init, C_init = a, C
+            a_init = a
 
-        pos = [[a_init, C_init] * np.random.normal(1, 1e-3, size=2) for _ in range(nwalkers)]
+        pos = []
+        for _ in range(nwalkers):
+            a = a_init + np.random.normal(0, 0.1)
+            C = 10**(np.log10(C_guess(a_init)) + np.random.normal(0, 0.1))
+            pos.append([a, C])
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
         sampler.run_mcmc(pos, nsteps)
         self.MCMCsampler = sampler
