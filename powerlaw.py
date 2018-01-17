@@ -55,21 +55,20 @@ class PowerLawFit(object):
         elim = [dataset.elim for dataset in self.flares.datasets]
         expt = [dataset.expt for dataset in self.flares.datasets]
         Dexpt, Delim, Dn = map(np.array, [expt, elim, n])
-        def loglike_poisson(a_cum, C):
-            lam = Dexpt * C * Delim ** -a_cum
+        def loglike_poisson(a_cum, logC):
+            lam = Dexpt * 10**logC * Delim ** -a_cum
             return np.sum(-lam + Dn * np.log(lam) - gammaln(Dn + 1))
 
         # all together now!
+        # keep C in log space. Otherwise, it seems the MCMC can't handle the narrow, highly curved distribution.
         def loglike(params):
-            a_cum, C = params
+            a_cum, logC = params
 
             # always enforce a this general prior
             if a_cum <= 0:
                 return -np.inf
-            if C <= 0:
-                return -np.inf
-            return (loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, C) + self.a_prior(a_cum)
-                    + self.logC_prior(np.log10(C)))
+            return (loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, logC) + self.a_prior(a_cum)
+                    + self.logC_prior(logC))
 
         self.loglike = loglike
 
@@ -80,29 +79,29 @@ class PowerLawFit(object):
         if not 0 < a_guess < 2:
             a_guess = 1.0
         elim_mean = np.mean([data.elim for data in self.flares.datasets])
-        def guess_C(a_guess):
-            return self.flares.n_total / self.flares.expt_total * elim_mean ** a_guess
-        C_guess = guess_C(a_guess)
+        def guess_logC(a_guess):
+            return np.log10(self.flares.n_total / self.flares.expt_total * elim_mean ** a_guess)
+        logC_guess = guess_logC(a_guess)
 
-        result = minimize(neglike, [a_guess, C_guess], method='bfgs')
+        result = minimize(neglike, [a_guess, logC_guess], method='Nelder-Mead')
         self.ml_result = result
         if not result.success or not np.all(np.isfinite(result.x)):
             self.ml_success = False
             self.a_ml = None
-            self.C_ml = None
+            self.logC_ml = None
             a_init = 1.0
         else:
             self.ml_success = True
-            a, C = result.x
+            a, logC = result.x
             self.a_ml = a
-            self.C_ml = C
+            self.logC_ml = logC
             a_init = a
 
         pos = []
         for _ in range(nwalkers):
-            a = a_init + np.random.normal(0, 0.1)
-            C = 10**(np.log10(C_guess(a_init)) + np.random.normal(0, 0.1))
-            pos.append([a, C])
+            a = a_init + np.random.normal(0, 0.01)
+            logC = guess_logC(a_init) + np.random.normal(0, 0.2)
+            pos.append([a, logC])
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
         sampler.run_mcmc(pos, nsteps)
         self.MCMCsampler = sampler

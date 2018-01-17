@@ -1,6 +1,6 @@
 import numpy as _np
-from math import ceil
-
+from math import ceil, floor
+from scipy.stats import gaussian_kde
 
 def mode_halfsample(x, presorted=False):
     """
@@ -92,7 +92,6 @@ def error_bars(x, x_ml=None, interval=0.683, upper_limit=0.95):
     # should return an upper limit of roughly 6 as nan, nan, 6
 
     """
-
 
     x = _np.sort(x)
     if x_ml is None:
