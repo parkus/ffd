@@ -93,6 +93,9 @@ def error_bars(x, x_ml=None, interval=0.683, upper_limit=0.95):
 
     """
 
+    if _np.any(_np.isnan(x)):
+        raise ValueError('There are NaNs in the samples.')
+
     x = _np.sort(x)
     if x_ml is None:
         x_ml = mode_halfsample(x, presorted=True)
