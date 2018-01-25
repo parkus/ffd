@@ -25,12 +25,17 @@ def _prior_boilerplate(prior):
 
 class PowerLawFit(object):
 
-    def __init__(self, flares, a_prior=None, logC_prior=None, nwalkers=10, nsteps=1000):
+    def __init__(self, flare_dataset, a_prior=None, logC_prior=None, nwalkers=10, nsteps=1000):
         """
         Create a PowerLawMCMC object. Intended to be created by a call to Flares.mcmc_powerlaw.
         """
+        if flare_dataset.n_total < 3 and a_prior is None:
+            raise ValueError('At least 3 flares required to attempt a fit unless you place a prior on a. '
+                             'Several more than 3 will likely be required for said fit to converge.')
+        if flare_dataset.n_total == 0:
+            raise ValueError('No flares in the provided FlareDataset.')
 
-        self.flares = flares
+        self.flare_dataset = flare_dataset
         self.a_prior = _prior_boilerplate(a_prior)
         self.logC_prior = _prior_boilerplate(logC_prior)
 
@@ -40,20 +45,20 @@ class PowerLawFit(object):
 
         # first handle the power law portion of the likelihood
         expt, elim, n, e = [], [], [], []
-        for dataset in self.flares.datasets:
-            _n = dataset.n
-            expt.extend([dataset.expt] * _n)
-            elim.extend([dataset.elim] * _n)
+        for obs in self.flare_dataset.observations:
+            _n = obs.n
+            expt.extend([obs.expt] * _n)
+            elim.extend([obs.elim] * _n)
             n.extend([_n] * _n)
-            e.extend(dataset.e.tolist() if dataset.n > 0 else [])
+            e.extend(obs.e.tolist() if obs.n > 0 else [])
         Fexpt, Felim, Fn, Fe = map(np.array, [expt, elim, n, e])
         def loglike_powerlaw(a_diff):
             return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
         # next handle the (independent) poisson portion of the likelihood
-        n = [dataset.n for dataset in self.flares.datasets]
-        elim = [dataset.elim for dataset in self.flares.datasets]
-        expt = [dataset.expt for dataset in self.flares.datasets]
+        n = [obs.n for obs in self.flare_dataset.observations]
+        elim = [obs.elim for obs in self.flare_dataset.observations]
+        expt = [obs.expt for obs in self.flare_dataset.observations]
         Dexpt, Delim, Dn = map(np.array, [expt, elim, n])
         def loglike_poisson(a_cum, logC):
             lam = Dexpt * 10**logC * Delim ** -a_cum
@@ -78,9 +83,9 @@ class PowerLawFit(object):
         a_guess = self._quick_n_dirty_index()
         if not 0 < a_guess < 2:
             a_guess = 1.0
-        elim_mean = np.mean([data.elim for data in self.flares.datasets])
+        elim_mean = np.mean([data.elim for data in self.flare_dataset.observations])
         def guess_logC(a_guess):
-            return np.log10(self.flares.n_total / self.flares.expt_total * elim_mean ** a_guess)
+            return np.log10(self.flare_dataset.n_total / self.flare_dataset.expt_total * elim_mean ** a_guess)
         logC_guess = guess_logC(a_guess)
 
         result = minimize(neglike, [a_guess, logC_guess], method='Nelder-Mead')
@@ -103,6 +108,8 @@ class PowerLawFit(object):
             logC = guess_logC(a_init) + np.random.normal(0, 0.2)
             pos.append([a, logC])
         sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
+        pos, prob, state = sampler.run_mcmc(pos, 100) # burn in
+        sampler.reset()
         sampler.run_mcmc(pos, nsteps)
         self.MCMCsampler = sampler
 
@@ -128,9 +135,9 @@ class PowerLawFit(object):
         a, aerr: floats
             max likelihood power-law index and error
         """
-        e = np.concatenate([data.e for data in self.flares.datasets])
-        elim = np.concatenate([[data.elim]*data.n for data in self.flares.datasets])
-        N = self.flares.n_total
+        e = np.concatenate([data.e for data in self.flare_dataset.observations])
+        elim = np.concatenate([[data.elim] * data.n for data in self.flare_dataset.observations])
+        N = self.flare_dataset.n_total
         a = N / (np.sum(np.log(e / elim)))
         return a
 
@@ -139,9 +146,9 @@ class PowerLawFit(object):
             raise ValueError('No best fit to plot for this Fit object.')
         if ax is None:
             ax = plt.gca()
-        self.flares.plot_ffd(ax=ax, **step_kws)
-        emin = min(*[d.elim for d in self.flares.datasets])
-        emax = max(*[np.max(d.e) for d in self.flares.datasets])
+        self.flare_dataset.plot_ffd(ax=ax, **step_kws)
+        emin = min(*[d.elim for d in self.flare_dataset.observations])
+        emax = max(*[np.max(d.e) for d in self.flare_dataset.observations])
         plot(self.a_ml, self.C_ml, emin, emax, **line_kws)
 
 
@@ -208,6 +215,6 @@ def plot(a, C, emin, emax, *args, **kwargs):
     -------
     line : matplotlib line object
     """
-    ax = kwargs.get('ax', plt.gca())
+    ax = kwargs.pop('ax', plt.gca())
     fmin, fmax = [cumulative_frequency(a, C, e) for e in  [emin, emax]]
-    return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)
+    return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)[0]

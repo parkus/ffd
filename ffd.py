@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-class Flares(object):
+class FlareDataset(object):
     """
     A Flares object contains the energy (or other defining metric) of flares from a compendium of datasets
     (specifically FlareDataset objects).
@@ -26,13 +26,13 @@ class Flares(object):
         been detected.
     """
 
-    def __init__(self, datasets):
+    def __init__(self, observations):
         """
         Creat a Flares object.
 
         Parameters
         ----------
-        datasets : list
+        observations : list
             A list of FlareDataset objects. Make sure they use a consistent metric to characterize the flares (
             energy, equivalent duration, peak flux, etc.)
 
@@ -41,34 +41,40 @@ class Flares(object):
         A Flares object :)
 
         """
-        self.datasets = datasets
+        self.observations = observations
 
         # totals
-        self.n_total = sum([data.n for data in datasets])
-        self.expt_total = np.sum([data.expt for data in datasets])
+        self.n_total = sum([data.n for data in observations])
+        self.expt_total = np.sum([data.expt for data in observations])
 
         # event energies concatenated from all flare datasets
-        self.e = np.concatenate([data.e for data in datasets])
+        self.e = np.concatenate([data.e for data in observations])
         self.e = np.sort(self.e)
 
         # exposure time in which an event of energy e *could* have been detected
-        expts = np.array([data.expt for data in datasets])
-        elims = np.array([data.elim for data in datasets])
+        expts = np.array([data.expt for data in observations])
+        elims = np.array([data.elim for data in observations])
         isort = np.argsort(elims)
         elims, expts = [a[isort] for a in [elims, expts]]
         self.expt_at_lim = np.cumsum(expts)
         self.elims, self.expts = elims, expts
-        emax = max(np.max(elims), np.max(self.e))
-        count, _ = np.histogram(self.e, np.append(elims, emax+1))
-        self.n_detected = np.cumsum(count[::-1])[::-1]
 
-        # cumulative frequencies ignoring differences in detection limits and correcting for them
-        cumno = np.arange(self.n_total)[::-1] + 1
-        self.cumfreq_naive = (cumno / self.expt_total)
-        i_lims = np.searchsorted(elims, self.e, side='right')
-        expt_detectable = self.expt_at_lim[i_lims - 1]
-        cumno_corrected = np.cumsum(1. / expt_detectable[::-1])[::-1] * self.expt_total
-        self.cumfreq_corrected = cumno_corrected / self.expt_total
+        if self.n_total > 0:
+            emax = max(np.max(elims), np.max(self.e))
+            count, _ = np.histogram(self.e, np.append(elims, emax+1))
+            self.n_detected = np.cumsum(count[::-1])[::-1]
+
+            # cumulative frequencies ignoring differences in detection limits and correcting for them
+            cumno = np.arange(self.n_total)[::-1] + 1
+            self.cumfreq_naive = (cumno / self.expt_total)
+            i_lims = np.searchsorted(elims, self.e, side='right')
+            expt_detectable = self.expt_at_lim[i_lims - 1]
+            cumno_corrected = np.cumsum(1. / expt_detectable[::-1])[::-1] * self.expt_total
+            self.cumfreq_corrected = cumno_corrected / self.expt_total
+        else:
+            self.n_detected = np.array([0] * len(observations))
+            self.cumfreq_naive = np.array([0] * len(observations))
+            self.cumfreq_corrected = np.array([0] * len(observations))
 
     def plot_ffd(self, *args, **kwargs):
         """
@@ -84,6 +90,8 @@ class Flares(object):
         corrected : boolean
             Whether to use the naive or corrected cumulative frequency. The naive value is more common for large
             datasets and produces a drop-off of the expected power-law at low flare energies.
+        scale : 1.0
+            Scale to apply to cumulative frequency (so you can use different units, for example).
         kwargs :
             passed to the matplotlib plot function
 
@@ -92,14 +100,16 @@ class Flares(object):
         line :
             matplotlib line object
         """
-        ax = kwargs.get('ax', plt.gca())
-        corrected = kwargs.get('corrected', True)
+        ax = kwargs.pop('ax', plt.gca())
+        corrected = kwargs.pop('corrected', True)
+        scale = kwargs.pop('scale', 1.0)
         cf = self.cumfreq_corrected if corrected else self.cumfreq_naive
+        cf = cf*scale
         line, = ax.step(self.e, cf, where='pre', **kwargs)
         return line
 
 
-class FlareDataset(object):
+class Observation(object):
 
     def __init__(self, detection_limit, exposure_time, flare_energies=[]):
         """
