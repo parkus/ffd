@@ -135,6 +135,3 @@ class Observation(object):
 
 
 
-
-
-
