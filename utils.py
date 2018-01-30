@@ -54,7 +54,7 @@ class OutOfRange(Exception):
     pass
 
 
-def error_bars(x, x_ml=None, interval=0.683, upper_limit=0.95):
+def error_bars(x, x_ml=None, interval=0.683, limit=0.95):
     """
     Find the most likely value and error bars (confidence interval) of a parameter based on random samples (as from
     an MCMC parameter search). If a most likely value with a confidence interval is not well defined, return an upper
@@ -100,37 +100,14 @@ def error_bars(x, x_ml=None, interval=0.683, upper_limit=0.95):
     if x_ml is None:
         x_ml = mode_halfsample(x, presorted=True)
 
-    # compute the cumulative integral based on the sorted samples
-    # cdf will be a step function, jumping up at each x
-    cdf = _np.arange(len(x), dtype='f8')/len(x)
+    interval_pcntl = 100 * _np.array([(1-interval)/2, (1+interval)/2])
+    x_min, x_max = _np.percentile(x, interval_pcntl)
 
-    # use cdf to define an inverse cdf function
-    def inverse_cdf(c_value):
-        i = _np.searchsorted(cdf, c_value)
-        if i == 0 or i == len(cdf):
-            raise OutOfRange('CDF value beyond sampled range.')
-        else:
-            return x[i-1]
+    if x_ml < x_min: # upper limit
+        return [_np.nan, _np.nan, _np.percentile(x, limit)]
 
-    # try to find each end of the confidence interval
-    # if the mode of the distribution is too far from the median such that the confidence interval cannot be reached,
-    # then treat as an upper or lower limit
-    i_mode = _np.searchsorted(x, x_ml)
-    c_mode = (cdf[i_mode-1] + cdf[i_mode])/2.0
+    if x_ml > x_max: # lower limit
+        return [_np.nan, _np.percentile(x, 1-limit), _np.nan]
 
-    # try lower interval
-    try:
-        x_min = inverse_cdf(c_mode - interval/2.)
-    except OutOfRange:
-        x_lim = inverse_cdf(upper_limit)
-        return _np.nan, _np.nan, x_lim
-
-    # try upper interval
-    try:
-        x_max = inverse_cdf(c_mode + interval/2.)
-    except OutOfRange:
-        x_lim = inverse_cdf(1 - upper_limit)
-        return _np.nan, x_lim, _np.nan
-
-    # if neither encountered a limit return the interval
+    # interval is good
     return x_ml, x_min - x_ml, x_max - x_ml
