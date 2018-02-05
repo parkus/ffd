@@ -4,11 +4,24 @@ import emcee
 from scipy.optimize import minimize
 from scipy.special import gammaln
 
-def _loglike_from_interval(x, interval):
+def loglike_from_interval(x, interval):
     if x < interval[0] or x > interval[-1]:
         return -np.inf
     else:
         return 0.0
+
+
+def loglike_from_hist(bins, counts):
+    integral = np.sum(np.diff(bins)*counts)
+    norm = counts/integral
+    def loglike(x):
+        if x <= bins[0]:
+            return -np.inf
+        if x >= bins[-1]:
+            return -np.inf
+        i = np.searchsorted(bins, x)
+        return np.log(norm[i - 1])
+    return loglike
 
 
 def _prior_boilerplate(prior):
@@ -16,7 +29,7 @@ def _prior_boilerplate(prior):
         return lambda x: 0.0
     elif not hasattr(prior, '__call__'):
         try:
-            return lambda x: _loglike_from_interval(x, prior)
+            return lambda x: loglike_from_interval(x, prior)
         except TypeError:
             raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
     else:
@@ -32,8 +45,8 @@ class PowerLawFit(object):
         if flare_dataset.n_total < 3 and a_prior is None:
             raise ValueError('At least 3 flares required to attempt a fit unless you place a prior on a. '
                              'Several more than 3 will likely be required for said fit to converge.')
-        if flare_dataset.n_total == 0:
-            raise ValueError('No flares in the provided FlareDataset.')
+        # if flare_dataset.n_total == 0:
+        #     raise ValueError('No flares in the provided FlareDataset.')
 
         self.flare_dataset = flare_dataset
         self.a_prior = _prior_boilerplate(a_prior)
@@ -61,15 +74,17 @@ class PowerLawFit(object):
         expt = [obs.expt for obs in self.flare_dataset.observations]
         Dexpt, Delim, Dn = map(np.array, [expt, elim, n])
         def loglike_poisson(a_cum, logC):
-            lam = Dexpt * 10**logC * Delim ** -a_cum
-            return np.sum(-lam + Dn * np.log(lam) - gammaln(Dn + 1))
+            # keeping lambda in log space avoids log(lam = 0) resulting from some MCMC samples where very low logC
+            # values are tried such that 10**logC = 0 to computer precision
+            loglam = np.log(Dexpt) + logC*np.log(10.) - a_cum*np.log(Delim)
+            return np.sum(-10**loglam + Dn * loglam - gammaln(Dn + 1))
 
         # all together now!
         # keep C in log space. Otherwise, it seems the MCMC can't handle the narrow, highly curved distribution.
         def loglike(params):
             a_cum, logC = params
 
-            # always enforce a this general prior
+            # always enforce this general prior on a
             if a_cum <= 0:
                 return -np.inf
             return (loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, logC) + self.a_prior(a_cum)
@@ -77,37 +92,69 @@ class PowerLawFit(object):
 
         self.loglike = loglike
 
-        def neglike(params):
-            return -loglike(params)
-
-        a_guess = self._quick_n_dirty_index()
-        if not 0 < a_guess < 2:
-            a_guess = 1.0
         elim_mean = np.mean([data.elim for data in self.flare_dataset.observations])
         def guess_logC(a_guess):
-            return np.log10(self.flare_dataset.n_total / self.flare_dataset.expt_total * elim_mean ** a_guess)
-        logC_guess = guess_logC(a_guess)
+            n = self.flare_dataset.n_total
+            if n == 0:
+                n = 1
+            return np.log10(n / self.flare_dataset.expt_total * elim_mean ** a_guess)
 
-        result = minimize(neglike, [a_guess, logC_guess], method='Nelder-Mead')
-        self.ml_result = result
-        if not result.success or not np.all(np.isfinite(result.x)):
+        # the MCMC sampler seems to struggle to sample the posterior of the rate constant C well when there are no
+        # flares and it is specified as logC (log10(C)). I think this is because it is basically unconstrained to -inf.
+        # However, when there is a flare logC tends to be much more normally distributed than C and if C is used the
+        # MCMC sampler does wacky things. So I'll treat the two separately.
+        if flare_dataset.n_total > 0:
+
+            # try to find max likelihood values
+            def neglike(params):
+                return -loglike(params)
+            a_guess = self._quick_n_dirty_index()
+            if not 0 < a_guess < 2:
+                a_guess = 1.0
+            logC_guess = guess_logC(a_guess)
+            result = minimize(neglike, [a_guess, logC_guess], method='Nelder-Mead')
+            self.ml_result = result
+            if not result.success or not np.all(np.isfinite(result.x)):
+                self.ml_success = False
+                self.a_ml = None
+                self.logC_ml = None
+                a_init = 1.0
+            else:
+                self.ml_success = True
+                a, logC = result.x
+                self.a_ml = a
+                self.logC_ml = logC
+                a_init = a
+
+            pos = []
+            for _ in range(nwalkers):
+                a = a_init + np.random.normal(0, 0.01)
+                logC = guess_logC(a_init) + np.random.normal(0, 0.2)
+                pos.append([a, logC])
+
+            sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
+
+        else: # no flares in dataset
             self.ml_success = False
             self.a_ml = None
             self.logC_ml = None
             a_init = 1.0
-        else:
-            self.ml_success = True
-            a, logC = result.x
-            self.a_ml = a
-            self.logC_ml = logC
-            a_init = a
+            pos = []
 
-        pos = []
-        for _ in range(nwalkers):
-            a = a_init + np.random.normal(0, 0.01)
-            logC = guess_logC(a_init) + np.random.normal(0, 0.2)
-            pos.append([a, logC])
-        sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
+            def loglike_linear(params):
+                a, C = params
+                if C < 0:
+                    return -np.inf
+                return loglike([a, np.log10(C)])
+
+            for _ in range(nwalkers):
+                a = a_init + np.random.normal(0, 0.01)
+                logC = guess_logC(a_init) + np.random.normal(0, 0.2)
+                C = 10**logC
+                pos.append([a, C])
+
+            sampler = emcee.EnsembleSampler(nwalkers, 2, loglike_linear)
+
         pos, prob, state = sampler.run_mcmc(pos, 100) # burn in
         sampler.reset()
         sampler.run_mcmc(pos, nsteps)
