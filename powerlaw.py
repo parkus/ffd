@@ -3,6 +3,7 @@ import numpy as np
 import emcee
 from scipy.optimize import minimize
 from scipy.special import gammaln
+from warnings import warn
 
 def loglike_from_interval(x, interval):
     if x < interval[0] or x > interval[-1]:
@@ -51,6 +52,11 @@ class PowerLawFit(object):
         self.flare_dataset = flare_dataset
         self.a_prior = _prior_boilerplate(a_prior)
         self.logC_prior = _prior_boilerplate(logC_prior)
+        self.n = flare_dataset.n_total
+        if self.n == 0:
+            warn('No flares in the flare dataset. Be cautious: for MCMC samples of the posterior of C and similar '
+                 'derived quantities (such as flare rate), use only the linear values, not logC, and use them only to '
+                 'constrain upper limits.')
 
         # now make a function to rapidly compute the log likelihood.
 
@@ -82,6 +88,22 @@ class PowerLawFit(object):
         # all together now!
         # keep C in log space. Otherwise, it seems the MCMC can't handle the narrow, highly curved distribution.
         def loglike(params):
+            """
+            Log likelihood of the posterior distribution for values a and logC for a power-law fit to the cumulative
+            flare frequency distribution,
+
+            (flare rate) = 10**logC * (flare energy)**-a.
+
+            Parameters
+            ----------
+            params : [a, logC]
+                values of the power-law parameters defined above. logC is log(C) (i.e. base-10 logarithm)
+
+            Returns
+            -------
+            loglike : scalar
+                ln(likelihood) of the model given the flare data
+            """
             a_cum, logC = params
 
             # always enforce this general prior on a
@@ -103,6 +125,7 @@ class PowerLawFit(object):
         # flares and it is specified as logC (log10(C)). I think this is because it is basically unconstrained to -inf.
         # However, when there is a flare logC tends to be much more normally distributed than C and if C is used the
         # MCMC sampler does wacky things. So I'll treat the two separately.
+
         if flare_dataset.n_total > 0:
 
             # try to find max likelihood values
@@ -158,15 +181,28 @@ class PowerLawFit(object):
         pos, prob, state = sampler.run_mcmc(pos, 100) # burn in
         sampler.reset()
         sampler.run_mcmc(pos, nsteps)
-        self.MCMCsampler = sampler
+        self._MCMCsampler = sampler
 
     @property
     def a(self):
-        return self.MCMCsampler.flatchain[:,0]
+        return self._MCMCsampler.flatchain[:,0]
 
     @property
     def C(self):
-        return self.MCMCsampler.flatchain[:,1]
+        if self.n == 0:
+            return self._MCMCsampler.flatchain[:,1]
+        else:
+            return 10**self._MCMCsampler.flatchain[:,1]
+
+    def logC(self):
+        if self.n == 0:
+            return np.log10(self._MCMCsampler.flatchain[:,1])
+        else:
+            return self._MCMCsampler.flatchain[:,1]
+
+
+    def run_mcmc(self, nsteps):
+        self._MCMCsampler.run_mcmc(None, nsteps)
 
 
     def _quick_n_dirty_index(self):
