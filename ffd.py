@@ -108,6 +108,9 @@ class FlareDataset(object):
         line, = ax.step(self.e, cf, where='pre', **kwargs)
         return line
 
+    def __len__(self):
+        return self.n_total
+
 
 class Observation(object):
 
