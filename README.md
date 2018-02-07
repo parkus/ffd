@@ -1,4 +1,5 @@
-#FFD
+FFD
+===
 FFD (which stands for Flare Frequency Distribution) is a short piece of code to aid in fitting power-laws to FFDs. FFDs relate the frequency (i.e., occurrence rate) of flares to their energy (or peak flux, photometric equivalent width, etc.). In particular, this module was created to handle disparate datasets between which the flare detection limit varies. That is about the only mildly original aspect of FFD -- the rest is primarily convenience code.
 
 The approach to the fitting is described in Appendix B of Loyd+ 2018 (The Astrophysical Journal, submitted). In essence, the number of flares detected is treated as following a Poisson distribution while the flare energies are treated as following a power law.
@@ -51,7 +52,7 @@ observations = []
 for expt, elim in zip(expts, elims):
   n_expected = expt * C * elim**-a  # expected number of flares
   n = np.random.poisson(n_expected) # simulated actual number detected
-  e = power_rv(elim, np.inf, a, n)
+  e = power_rv(elim, np.inf, a, n) # simulated flare energies
   obs = ffd.Observation(elim, expt, e)
   observations.append(obs)
 
