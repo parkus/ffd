@@ -265,6 +265,7 @@ class PowerLawFit(object):
         else:
             return 10**self._MCMCsampler.flatchain[:,1]
 
+    @property
     def logC(self):
         if self.n == 0:
             return np.log10(self._MCMCsampler.flatchain[:,1])
