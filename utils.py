@@ -1,6 +1,5 @@
 import numpy as _np
 from math import ceil, floor
-from scipy.stats import gaussian_kde
 
 def mode_halfsample(x, presorted=False):
     """
@@ -10,7 +9,8 @@ def mode_halfsample(x, presorted=False):
     ----------
     x : array-like
         The randomly sampled data for which to find the mode.
-    presorted
+    presorted : boolean
+        True if the data are already sorted (can save time if function is looped). Default is False.
 
     Returns
     -------
@@ -20,12 +20,13 @@ def mode_halfsample(x, presorted=False):
     Notes
     -----
     Sometimes other ways of estimating the mode perform better, such as kernel density estimation, for specific
-    forms of the pdf. However, this method is accurate, fairly robust and very fast.
+    forms of the pdf. However, this method is accurate, fairly robust, and very fast.
 
     Examples
     --------
     x = np.random.exponential(size=100000)
     mode_halfsample(x)
+    # should return a value near 0
 
     References
     ----------
@@ -67,11 +68,11 @@ def error_bars(x, x_ml=None, interval=0.683, limit=0.95):
     x_ml : float
         Max-likelihood value of x. Useful when this value was found with, say, scipy.optimize.minimize and now you
         just want to get the error bars to either side of that value, even though the MCMC sampling might show a
-        different peak.
+        slightly different peak.
     interval : float
         The width of the confidence interval (such as 0.683 for 1-sigma error bars).
-    upper_limit : float
-        The cumulative probability at which to set the upper limit.
+    limit : float
+        The cumulative probability at which to set an upper or lower limit as necessary.
 
     Returns
     -------
@@ -83,13 +84,23 @@ def error_bars(x, x_ml=None, interval=0.683, limit=0.95):
     Examples
     --------
     import numpy as np
+    from matplotlib import pyplot as plt
     x = np.random.normal(10., 2., size=100000)
-    confidence_interval(x)
+    _ = plt.hist(x, 200) # see what the PDF it looks like
+    error_bars(x)
     # should return roughly 10, -2, 2
 
     x = np.random.gamma(1.0, 2.0, size=100000)
-    confidence_interval(x)
+    _ = plt.hist(x, 200) # see what the PDF looks like
+    error_bars(x)
     # should return an upper limit of roughly 6 as nan, nan, 6
+
+    Notes
+    -----
+    The confidence interval is taken to be the central chunk of the PDF corresponding to the value set by `interval`.
+    Error bars are then defined by the difference from the lower and upper limits of this chunk to the max-likelihood
+    value. If the max-likelihood value is outside of these limits, then the PDF is interpreted as only giving an upper
+    or lower limit as appropriate, and that limiting value is computed and returned instead.
 
     """
 
@@ -104,10 +115,10 @@ def error_bars(x, x_ml=None, interval=0.683, limit=0.95):
     x_min, x_max = _np.percentile(x, interval_pcntl)
 
     if x_ml < x_min: # upper limit
-        return [_np.nan, _np.nan, _np.percentile(x, limit)]
+        return [_np.nan, _np.nan, _np.percentile(x, 100*limit)]
 
     if x_ml > x_max: # lower limit
-        return [_np.nan, _np.percentile(x, 1-limit), _np.nan]
+        return [_np.nan, _np.percentile(x, 100*(1-limit)), _np.nan]
 
     # interval is good
     return x_ml, x_min - x_ml, x_max - x_ml
