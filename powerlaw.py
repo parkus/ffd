@@ -126,16 +126,16 @@ class PowerLawFit(object):
         def loglike_powerlaw(a_diff):
             return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
-        # next handle the (independent) poisson portion of the likelihood
+        # next handle the poisson portion of the likelihood
         n = [obs.n for obs in self.flare_dataset.observations]
         elim = [obs.elim for obs in self.flare_dataset.observations]
         expt = [obs.expt for obs in self.flare_dataset.observations]
-        Dexpt, Delim, Dn = map(np.array, [expt, elim, n])
+        expt, elim, n = map(np.array, [expt, elim, n])
         def loglike_poisson(a_cum, logC):
             # sometimes the MCMC sampler tries values for logC that are so low that 10**logC = 0 to computer precision
             # keeping lambda in log space avoids this resulting in a nan likelihood resulting from a np.log(0) operation
-            loglam = np.log(Dexpt) + logC*np.log(10.) - a_cum*np.log(Delim)
-            return np.sum(-10**loglam + Dn * loglam - gammaln(Dn + 1))
+            loglam = np.log(expt) + logC*np.log(10.) - a_cum*np.log(elim)
+            return np.sum(-np.e**loglam + n * loglam - gammaln(n + 1))
 
         # all together now!
         # Define likelihood as a function of a,logC so that the MCMC sampler will explore that space.
