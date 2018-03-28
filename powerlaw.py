@@ -213,7 +213,7 @@ class PowerLawFit(object):
 
             # try to find max-likelihood values of a, logC using numerical minimization of -loglike
             def neglike(params):
-                return -loglike(params)
+                return -loglike(params, include_errors=False)
             a_guess = self._quick_n_dirty_index()
             if not 0 < a_guess < 2:
                 a_guess = 1.0
