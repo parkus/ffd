@@ -95,6 +95,7 @@ class PowerLawFit(object):
 
         where f is the cumulative frequency of flares with energies greater than e.
         """
+        include_errors = flare_dataset.has_errors
         self.flare_dataset = flare_dataset
         self.a_prior = _prior_boilerplate(a_prior)
         self.logC_prior = _prior_boilerplate(logC_prior)
@@ -111,18 +112,22 @@ class PowerLawFit(object):
         # region log likelihood function
         #
         # now make a function to rapidly compute the log likelihood. This would be much more readable if I separately
-        # computed the log likelihood for each flare observation object and added them. However, it is much faster if
-        # I aggregate the data from each and compute likelihoods "all at once."
+        # computed the log likelihood for each flare observation object and added them. However, it is much faster
+        # computationally if I aggregate the data from each and compute likelihoods "all at once."
 
-        # first handle the power law portion of the likelihood
-        expt, elim, n, e = [], [], [], []
+        # make vectors of events, exposure times, and detection limits
+        expt, elim, n, e, err = [], [], [], [], []
         for obs in self.flare_dataset.observations:
             _n = obs.n
             expt.extend([obs.expt] * _n)
             elim.extend([obs.elim] * _n)
             n.extend([_n] * _n)
             e.extend(obs.e.tolist() if obs.n > 0 else [])
-        Fexpt, Felim, Fn, Fe = map(np.array, [expt, elim, n, e])
+            if flare_dataset.has_errors:
+                err.extend(obs.e_err.tolist() if obs.n > 0 else [])
+        Fexpt, Felim, Fn, Fe, Ferr = map(np.array, [expt, elim, n, e, err])
+
+        # first handle the power law portion of the likelihood
         def loglike_powerlaw(a_diff):
             return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
@@ -137,13 +142,17 @@ class PowerLawFit(object):
             loglam = np.log(expt) + logC*np.log(10.) - a_cum*np.log(elim)
             return np.sum(-np.e**loglam + n * loglam - gammaln(n + 1))
 
+        # now handle the "nuissance" likelihood of the event energies
+        def loglike_nuissance(e_vec):
+                return np.sum(-0.5*np.log(2*np.pi) - np.log(Ferr) - (e_vec - Fe)**2/2/Ferr**2)
+
         # all together now!
         # Define likelihood as a function of a,logC so that the MCMC sampler will explore that space.
         # This avoids problems that occurred when the MCMC sampler tried to explore a,C space. The distribution in that
         # space is very narrow and highly curved, and it seems MCMC just can't accurately feel its way around it.
         #
         # However, an exception is when there are no flares to constrain the flare rate. We will get to that.
-        def loglike(params):
+        def loglike(params, include_errors=include_errors):
             """
             Log likelihood of the posterior distribution for values a and logC for a power-law fit to the cumulative
             flare frequency distribution,
@@ -160,13 +169,27 @@ class PowerLawFit(object):
             loglike : scalar
                 ln(likelihood) of the model given the flare data
             """
-            a_cum, logC = params
+            if include_errors:
+                a_cum, logC = params[:2]
+                e_vec = params[2:]
+            else:
+                a_cum, logC = params
 
             # always enforce this general prior on a
             if a_cum <= 0:
                 return -np.inf
-            return (loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, logC) + self.a_prior(a_cum)
-                    + self.logC_prior(logC))
+
+            # first the models of flare energies and rate
+            result = loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, logC)
+
+            # next any priors
+            result += self.a_prior(a_cum) + self.logC_prior(logC)
+
+            # finally, measurement uncertainty of the event energies
+            if include_errors:
+                result += loglike_nuissance(e_vec)
+
+            return result
 
         # save the loglike function for user access, if desired.
         self.loglike = loglike
@@ -216,8 +239,13 @@ class PowerLawFit(object):
             for _ in range(nwalkers):
                 a = a_init + np.random.normal(0, 0.01)
                 logC = guess_logC(a_init) + np.random.normal(0, 0.2)
-                pos.append([a, logC])
-            sampler = emcee.EnsembleSampler(nwalkers, 2, loglike)
+                if include_errors:
+                    e_vec = Fe + np.random.normal(0, Ferr/10., size=len(Fe))
+                    pos.append([a, logC] + e_vec.tolist())
+                else:
+                    pos.append([a, logC])
+            ndim = 2 + len(Fe) if include_errors else 2
+            sampler = emcee.EnsembleSampler(nwalkers, ndim, loglike)
 
         else: # no flares in dataset, sample in a,C space
 
