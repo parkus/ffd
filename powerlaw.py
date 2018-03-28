@@ -83,7 +83,7 @@ def _prior_boilerplate(prior):
     else:
         return prior
 
-
+#FIXME I should pick ML value of 1/a as best since this will be unbiased per crawford+ 1970
 class PowerLawFit(object):
 
     def __init__(self, flare_dataset, a_prior=None, logC_prior=None, nwalkers=10, nsteps=1000):
@@ -212,6 +212,7 @@ class PowerLawFit(object):
         if flare_dataset.n_total > 0: # sample in a,logC space
 
             # try to find max-likelihood values of a, logC using numerical minimization of -loglike
+            # use 1/a instead of a as a parameter to avoid bias per Crawford+ 1970
             def neglike(params):
                 return -loglike(params, include_errors=False)
             a_guess = self._quick_n_dirty_index()
@@ -224,14 +225,15 @@ class PowerLawFit(object):
             self.ml_result = result
             if not result.success or not np.all(np.isfinite(result.x)):
                 self.ml_success = False
-                self.a_ml = None
-                self.logC_ml = None
+                self.a_best = None
+                self.logC_best = None
                 a_init = 1.0
             else:
                 self.ml_success = True
                 a, logC = result.x
-                self.a_ml = a
-                self.logC_ml = logC
+                n = self.flare_dataset.n_total
+                self.a_best = (n-1)*a/n
+                self.logC_best = logC
                 a_init = a
 
             # get ready to MCMC sample the posterior
@@ -251,8 +253,8 @@ class PowerLawFit(object):
 
             # no max-like fit is possible in this case
             self.ml_success = False
-            self.a_ml = None
-            self.logC_ml = None
+            self.a_best = None
+            self.logC_best = None
             a_init = 1.0
             pos = []
 
@@ -284,6 +286,9 @@ class PowerLawFit(object):
 
     @property
     def a(self):
+        warn('You might be tempted to use the mode of expectation value of this distribution as the best-estimate for '
+             'a. However, that will be a biased estimate (see Crawford+ 1970 or Maschberger+ 2009 among others.'
+             'Use the  a_best property for an estimate that is less likely to be biased.')
         return self._MCMCsampler.flatchain[:,0]
 
     @property
@@ -333,6 +338,7 @@ class PowerLawFit(object):
         elim = np.concatenate([[data.elim] * data.n for data in self.flare_dataset.observations])
         N = self.flare_dataset.n_total
         a = N / (np.sum(np.log(e / elim)))
+        a = (N-1)*a/N # corrects for bias per Crawford+ 1970
         return a
 
     def plotfit(self, ax=None, line_kws=None, step_kws=None):
@@ -356,7 +362,7 @@ class PowerLawFit(object):
         self.flare_dataset.plot_ffd(ax=ax, **step_kws)
         emin = min(*[d.elim for d in self.flare_dataset.observations])
         emax = max(*[np.max(d.e) for d in self.flare_dataset.observations])
-        plot(self.a_ml, 10**self.C_ml, emin, emax, **line_kws)
+        plot(self.a_best, 10 ** self.C_ml, emin, emax, **line_kws)
 
 
 def cumulative_frequency(a, C, e):
