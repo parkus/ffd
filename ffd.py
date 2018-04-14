@@ -164,5 +164,3 @@ class Observation(object):
         self.n = len(flare_energies)
 
 
-
-

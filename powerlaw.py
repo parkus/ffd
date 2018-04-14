@@ -83,7 +83,6 @@ def _prior_boilerplate(prior):
     else:
         return prior
 
-#FIXME I should pick ML value of 1/a as best since this will be unbiased per crawford+ 1970
 class PowerLawFit(object):
 
     def __init__(self, flare_dataset, a_prior=None, logC_prior=None, nwalkers=10, nsteps=1000):
@@ -232,7 +231,8 @@ class PowerLawFit(object):
                 self.ml_success = True
                 a, logC = result.x
                 n = self.flare_dataset.n_total
-                self.a_best = (n-1)*a/n
+                # self.a_best = a
+                self.a_best = a_guess # just for testing
                 self.logC_best = logC
                 a_init = a
 
@@ -375,6 +375,7 @@ def cumulative_frequency(a, C, e):
     """
     return C*e**-a
 
+
 def differential_frequency(a, C, e):
     """
     Differential frequency of events with energies (or other metric) greater than e for a power-law of the form
@@ -384,6 +385,7 @@ def differential_frequency(a, C, e):
     to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
     """
     return a*C*e**(-a-1)
+
 
 def time_average(a, C, emin, emax):
     """
@@ -433,6 +435,8 @@ def plot(a, C, emin, emax, *args, **kwargs):
     ax = kwargs.pop('ax', plt.gca())
     fmin, fmax = [cumulative_frequency(a, C, e) for e in  [emin, emax]]
     return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)[0]
+
+
 def random_energies(a, emin, emax, n):
     # I found it easier to just make my own than figure out the numpy power, pareto, etc. random number generators
     norm = emin**-a - emax**-a
