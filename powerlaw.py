@@ -433,3 +433,9 @@ def plot(a, C, emin, emax, *args, **kwargs):
     ax = kwargs.pop('ax', plt.gca())
     fmin, fmax = [cumulative_frequency(a, C, e) for e in  [emin, emax]]
     return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)[0]
+def random_energies(a, emin, emax, n):
+    # I found it easier to just make my own than figure out the numpy power, pareto, etc. random number generators
+    norm = emin**-a - emax**-a
+    x_from_cdf = lambda c: ((1-c)*norm + emax**-a)**(-1/a)
+    x_uniform = np.random.uniform(size=n)
+    return x_from_cdf(x_uniform)
