@@ -85,7 +85,7 @@ def _prior_boilerplate(prior):
 
 class PowerLawFit(object):
 
-    def __init__(self, flare_dataset, a_prior=None, logC_prior=None, nwalkers=10, nsteps=1000):
+    def __init__(self, flare_dataset, a_logprior=None, logC_logprior=None, nwalkers=10, nsteps=1000):
         """
         Create an object representing a power-law fit to the flare frequency distribution for the flare observations
         provided in a FlareDataset object. The fit is of the form
@@ -96,11 +96,11 @@ class PowerLawFit(object):
         """
         include_errors = flare_dataset.has_errors
         self.flare_dataset = flare_dataset
-        self.a_prior = _prior_boilerplate(a_prior)
-        self.logC_prior = _prior_boilerplate(logC_prior)
+        self.a_prior = _prior_boilerplate(a_logprior)
+        self.logC_prior = _prior_boilerplate(logC_logprior)
         self.n = flare_dataset.n_total
 
-        if self.n < 3 and a_prior is None:
+        if self.n < 3 and a_logprior is None:
             raise ValueError('At least 3 flares required to attempt a fit unless you place a prior on a. '
                              'Several more than 3 will likely be required for said fit to converge.')
         if self.n == 0:
@@ -286,7 +286,7 @@ class PowerLawFit(object):
 
     @property
     def a(self):
-        warn('You might be tempted to use the mode of expectation value of this distribution as the best-estimate for '
+        warn('You might be tempted to use the mode or expectation value of this distribution as the best-estimate for '
              'a. However, that will be a biased estimate (see Crawford+ 1970 or Maschberger+ 2009 among others.'
              'Use the  a_best property for an estimate that is less likely to be biased.')
         return self._MCMCsampler.flatchain[:,0]
