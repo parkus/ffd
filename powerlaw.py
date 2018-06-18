@@ -224,16 +224,10 @@ class PowerLawFit(object):
             self.ml_result = result
             if not result.success or not np.all(np.isfinite(result.x)):
                 self.ml_success = False
-                self.a_best = None
-                self.logC_best = None
                 a_init = 1.0
             else:
                 self.ml_success = True
                 a, logC = result.x
-                n = self.flare_dataset.n_total
-                # self.a_best = a
-                self.a_best = a_guess # just for testing
-                self.logC_best = logC
                 a_init = a
 
             # get ready to MCMC sample the posterior
@@ -286,9 +280,6 @@ class PowerLawFit(object):
 
     @property
     def a(self):
-        warn('You might be tempted to use the mode or expectation value of this distribution as the best-estimate for '
-             'a. However, that will be a biased estimate (see Crawford+ 1970 or Maschberger+ 2009 among others.'
-             'Use the  a_best property for an estimate that is less likely to be biased.')
         return self._MCMCsampler.flatchain[:,0]
 
     @property
