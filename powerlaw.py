@@ -4,15 +4,14 @@ import emcee
 from scipy.optimize import minimize
 from scipy.special import gammaln
 from warnings import warn
-from scipy.stats import kstest
-
-
+from scipy.stats import kstest, pareto
+from scipy.interpolate import interpn
 
 
 class PowerLawFit(object):
 
     def __init__(self, flare_dataset, a_logprior=None, logC_logprior=None,
-                 scale_limits=False, nwalkers=10, nsteps=1000):
+                 scale_limits=False, nwalkers=100, nsteps=100):
         """
         Create an object representing a power-law fit to the flare frequency distribution for the flare observations
         provided in a FlareDataset object. The fit is of the form
@@ -40,11 +39,13 @@ class PowerLawFit(object):
             e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'power')
             possible_scales = e/elim
             possible_scales = possible_scales[possible_scales > 1]
+            possible_scales = np.sort(possible_scales)
             possible_scales = iter(possible_scales)
             while True:
                 a = self.index_analytic(limit_scale)
-                D, p = self.KS_test(a, limit_scale=limit_scale, alternative='less')
-                if p < 0.1:
+                D, n = self.KS_test(a, limit_scale=limit_scale, alternative='less')
+                Dcrit = KS_Dcrit(a, n, 0.25)
+                if D > Dcrit:
                     try:
                         limit_scale = possible_scales.next()
                     except StopIteration:
@@ -277,8 +278,12 @@ class PowerLawFit(object):
             _n = len(_e)
             fac = _n if power_or_poiss == 'power' else 1
             e.append(_e)
-            err.append(obs.err[keep])
-            n.append(_n * fac)
+            _err = obs.e_err
+            if _err is not None:
+                err.append(obs.e_err[keep])
+            else:
+                err.append([np.nan]*_n)
+            n.append([_n] * fac)
             elim.append([_elim] * fac)
             expt.append([obs.expt] * fac)
         return map(np.concatenate, (e, err, elim, expt, n))
@@ -286,18 +291,23 @@ class PowerLawFit(object):
 
     def _combined_normfac(self, a, limit_scale=None, data_vecs=None):
         if data_vecs is None:
-            data_vecs = self._get_data_vecs(self, limit_scale, 'poiss')
+            data_vecs = self._get_data_vecs(limit_scale, 'poiss')
         e, err, elim, expt, n = data_vecs
         return a / np.sum(expt * elim**-a)
 
 
     def combined_CDF(self, e, a, limit_scale=None, data_vecs=None):
+        e = np.reshape(e, [-1])
         if data_vecs is None:
-            data_vecs = self._get_data_vecs(self, limit_scale, 'poiss')
+            data_vecs = self._get_data_vecs(limit_scale, 'poiss')
         normfac = self._combined_normfac(a, limit_scale, data_vecs=data_vecs)
         _, _, elim, expt, _ = data_vecs
         keep = elim[None,:] < e[:, None]
-        return normfac/a * (np.sum((expt*elim**-a)[None,:]*keep,1) + np.sum(expt[None,:]*keep,1) * e ** -a)
+        bad = e <= 0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            result = normfac/a * (np.sum((expt*elim**-a)[None,:]*keep,1) - np.sum(expt[None,:]*keep,1) * e ** -a)
+        result[bad] = 0.
+        return result
 
 
     def PP(self, a, limit_scale=None):
@@ -315,8 +325,12 @@ class PowerLawFit(object):
 
 
     def KS_test(self, a, limit_scale=None, alternative='two-sided', mode='approx'):
-        CDF = lambda e: self.combined_CDF(e, a, limit_scale)
-        return kstest(self.flare_dataset.e, CDF, alternative=alternative, mode=mode)
+        data_vecs = self._get_data_vecs(limit_scale, 'poiss')
+        CDF = lambda e: self.combined_CDF(e, a, limit_scale, data_vecs)
+        e = data_vecs[0]
+        D = kstest(e, CDF, alternative=alternative, mode=mode)[0]
+        n = len(e)
+        return D, n
 
 
     def plotfit(self, ax=None, line_kws=None, step_kws=None):
@@ -501,3 +515,49 @@ def random_energies(a, emin, emax, n):
     x_from_cdf = lambda c: ((1-c)*norm + emax**-a)**(-1/a)
     x_uniform = np.random.uniform(size=n)
     return x_from_cdf(x_uniform)
+
+
+def ML_index_analytic(x, xlim):
+    """
+    Returns a quick-and-dirty max-likelihood power law fit of the form
+
+    f ~ e**-a
+
+    where f is the cumulative frequency of flares with energies greater than e.
+
+    Returns
+    -------
+    a : float
+        max likelihood power-law index
+    """
+    N = len(x)
+    a = N / (np.sum(np.log(x / xlim)))
+    a = (N-1)*a/N # corrects for bias per Crawford+ 1970
+    return a
+
+
+_path_ks_grid = 'power_KS_cube.npy'
+def _generate_KS_cube():
+    a_grid = np.arange(0.2, 2, 0.05)
+    n_grid = [5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
+    m = 1000
+    Dcube = np.zeros([len(a_grid), len(n_grid), m], dtype='f4')
+    for i, a in enumerate(a_grid):
+        for j, n in enumerate(n_grid):
+            D = []
+            for k in range(m):
+                rvs = pareto.rvs(a, size=n)
+                aML = ML_index_analytic(rvs, 1.)
+                cdf = lambda x: pareto.cdf(x, aML)
+                D.append(kstest(rvs, cdf)[0])
+            Dcube[i,j] = np.sort(D)
+    np.save(_path_ks_grid, np.array(a_grid, n_grid, Dcube))
+
+_KS_MCMC_ary = np.load(_path_ks_grid)
+_n = _KS_MCMC_ary[2].shape[-1]
+_cp_grid = (np.arange(_n) + 0.5)/_n
+def KS_Dcrit(a, n, p):
+    a_grid, n_grid, Dcube = _KS_MCMC_ary
+    return interpn((a_grid, n_grid, _cp_grid), Dcube, (a, n, 1-p))
+
+
