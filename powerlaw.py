@@ -6,6 +6,7 @@ from scipy.special import gammaln
 from warnings import warn
 from scipy.stats import kstest, pareto
 from scipy.interpolate import interpn
+import os
 
 
 class PowerLawFit(object):
@@ -22,8 +23,8 @@ class PowerLawFit(object):
         """
         include_errors = flare_dataset.has_errors
         self.flare_dataset = flare_dataset
-        self.a_prior = _prior_boilerplate(a_logprior)
-        self.logC_prior = _prior_boilerplate(logC_logprior)
+        self.a_logprior = _prior_boilerplate(a_logprior)
+        self.logC_logprior = _prior_boilerplate(logC_logprior)
         self.n = flare_dataset.n_total
 
         if self.n < 3 and a_logprior is None:
@@ -168,7 +169,7 @@ class PowerLawFit(object):
             result = loglike_powerlaw(a_cum + 1) + loglike_poisson(a_cum, logC)
 
             # next any priors
-            result += self.a_prior(a_cum) + self.logC_prior(logC)
+            result += self.a_logprior(a_cum) + self.logC_logprior(logC)
 
             # finally, measurement uncertainty of the event energies
             if include_errors:
@@ -232,7 +233,7 @@ class PowerLawFit(object):
             def loglike_linear(params):
                 a, C = params
                 if C < 0:
-                    return -np.infs
+                    return -np.inf
                 return loglike([a, np.log10(C)])
 
             # get ready to MCMC sample the posterior of a,C
@@ -381,7 +382,7 @@ def _prior_boilerplate(prior):
             raise ValueError('a_prior must either be a function or a list/tuple/array. See docstring.')
         return prior
     else:
-        pass
+        return prior
 
 
 def loglike_from_interval(interval):
@@ -536,7 +537,7 @@ def ML_index_analytic(x, xlim):
     return a
 
 
-_path_ks_grid = 'power_KS_cube.npy'
+_path_ks_grid = os.path.join(os.path.dirname(__file__), 'power_KS_cube.npy')
 def _generate_KS_cube():
     a_grid = np.arange(0.2, 2, 0.05)
     n_grid = [5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
