@@ -35,18 +35,17 @@ class PowerLawFit(object):
                  'derived quantities (such as flare rate), use only the linear values, not logC, and use them only to '
                  'constrain upper limits.')
 
-        if scale_limits:
-            limit_scale = 1.
-            e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'power')
-            possible_scales = e/elim
-            possible_scales = possible_scales[possible_scales > 1]
-            possible_scales = np.sort(possible_scales)
-            possible_scales = iter(possible_scales)
-            while True:
-                a = self.index_analytic(limit_scale)
-                D, n = self.KS_test(a, limit_scale=limit_scale, alternative='less')
-                Dcrit = KS_Dcrit(a, n, 0.25)
-                if D > Dcrit:
+        if scale_limits is True:
+            if type(scale_limits) is float:
+                limit_scale = scale_limits
+            else:
+                limit_scale = 1.
+                e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'power')
+                possible_scales = e/elim
+                possible_scales = possible_scales[possible_scales > 1]
+                possible_scales = np.sort(possible_scales)
+                possible_scales = iter(possible_scales)
+                while True:
                     try:
                         limit_scale = possible_scales.next()
                     except StopIteration:
