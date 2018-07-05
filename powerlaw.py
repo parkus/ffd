@@ -12,7 +12,7 @@ import os
 class PowerLawFit(object):
 
     def __init__(self, flare_dataset, a_logprior=None, logC_logprior=None,
-                 scale_limits=False, nwalkers=100, nsteps=100):
+                 scale_limits=False, rate_only=False, nwalkers=100, nsteps=100):
         """
         Create an object representing a power-law fit to the flare frequency distribution for the flare observations
         provided in a FlareDataset object. The fit is of the form
@@ -52,10 +52,14 @@ class PowerLawFit(object):
                     except StopIteration:
                         raise ValueError("No lower limit scaling could be found for which the data are consistent "
                                          "with a power law.")
-                else:
-                    break
+                    a = self.index_analytic(limit_scale)
+                    D, n = self.KS_test(a, limit_scale=limit_scale, alternative='less')
+                    Dcrit = KS_Dcrit(a, n, 0.25)
+                    if D < Dcrit:
+                        break
         else:
             limit_scale = None
+        self.limit_scale = limit_scale
 
         # region sample the fit posterior
         # the MCMC sampler seems to struggle to sample the posterior of the rate constant C well when there are no
@@ -64,7 +68,7 @@ class PowerLawFit(object):
         # MCMC sampler does wacky things. So I'll treat the two separately.
         Cscale = 'log' if self.n > 0 else 'linear'
         sampler, pos, loglike = self._make_sampler(nwalkers, Cscale, limit_scale=limit_scale,
-                                                   include_errors=include_errors)
+                                                   include_errors=include_errors, rate_only=rate_only)
         self.loglike = loglike
 
         # run some throw-away burn-in MCMC steps
@@ -112,13 +116,17 @@ class PowerLawFit(object):
         self._MCMCsampler.run_mcmc(None, nsteps)
 
 
-    def _make_sampler(self, nwalkers, Cscale='log', limit_scale=1, include_errors=False):
+    def _make_sampler(self, nwalkers, Cscale='log', limit_scale=1, include_errors=False, rate_only=False):
         # make vectors of events, exposure times, and detection limits
         Fe, Ferr, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'power')
 
         # first handle the power law portion of the likelihood
-        def loglike_powerlaw(a_diff):
-            return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
+        if rate_only:
+            def loglike_powerlaw(a_diff):
+                return 0.0
+        else:
+            def loglike_powerlaw(a_diff):
+                return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
         # next handle the poisson portion of the likelihood
         e, err, elim, expt, n = self._get_data_vecs(limit_scale, 'poiss')
