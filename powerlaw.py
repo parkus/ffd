@@ -12,7 +12,7 @@ import os
 class PowerLawFit(object):
 
     def __init__(self, flare_dataset, a_logprior=None, logC_logprior=None,
-                 scale_limits=False, rate_only=False, nwalkers=100, nsteps=100):
+                 scale_limits=False, rate_only=False, fit=True, nwalkers=100, nsteps=100):
         """
         Create an object representing a power-law fit to the flare frequency distribution for the flare observations
         provided in a FlareDataset object. The fit is of the form
@@ -27,10 +27,10 @@ class PowerLawFit(object):
         self.logC_logprior = _prior_boilerplate(logC_logprior)
         self.n = flare_dataset.n_total
 
-        if self.n < 3 and a_logprior is None:
+        if fit and self.n < 3 and a_logprior is None:
             raise ValueError('At least 3 flares required to attempt a fit unless you place a prior on a. '
                              'Several more than 3 will likely be required for said fit to converge.')
-        if self.n == 0:
+        if fit and self.n == 0:
             warn('No flares in the flare dataset. Be cautious: for MCMC samples of the posterior of C and similar '
                  'derived quantities (such as flare rate), use only the linear values, not logC, and use them only to '
                  'constrain upper limits.')
@@ -65,20 +65,21 @@ class PowerLawFit(object):
         # flares and it is specified as logC (log10(C)). I think this is because it is basically unconstrained to -inf.
         # However, when there is a flare logC tends to be much more normally distributed than C and if C is used the
         # MCMC sampler does wacky things. So I'll treat the two separately.
-        Cscale = 'log' if self.n > 0 else 'linear'
-        sampler, pos, loglike = self._make_sampler(nwalkers, Cscale, limit_scale=limit_scale,
-                                                   include_errors=include_errors, rate_only=rate_only)
-        self.loglike = loglike
+        if fit:
+            Cscale = 'log' if self.n > 0 else 'linear'
+            sampler, pos, loglike = self._make_sampler(nwalkers, Cscale, limit_scale=limit_scale,
+                                                       include_errors=include_errors, rate_only=rate_only)
+            self.loglike = loglike
 
-        # run some throw-away burn-in MCMC steps
-        pos, prob, state = sampler.run_mcmc(pos, 100) # burn in
-        sampler.reset()
+            # run some throw-away burn-in MCMC steps
+            pos, prob, state = sampler.run_mcmc(pos, 100) # burn in
+            sampler.reset()
 
-        # MCMC sample either a,logC or a,C
-        sampler.run_mcmc(pos, nsteps)
+            # MCMC sample either a,logC or a,C
+            sampler.run_mcmc(pos, nsteps)
 
-        # save the sampler, but don't let the user see it because the logC vs C possibility will definitely lead to confusion
-        self._MCMCsampler = sampler
+            # save the sampler, but don't let the user see it because the logC vs C possibility will definitely lead to confusion
+            self._MCMCsampler = sampler
         # endregion
 
     @property
@@ -547,7 +548,7 @@ def ML_index_analytic(x, xlim):
 _path_ks_grid = os.path.join(os.path.dirname(__file__), 'power_KS_cube.npy')
 def _generate_KS_cube():
     a_grid = np.arange(0.2, 2, 0.05)
-    n_grid = [5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
+    n_grid = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
     m = 1000
     Dcube = np.zeros([len(a_grid), len(n_grid), m], dtype='f4')
     for i, a in enumerate(a_grid):
@@ -559,7 +560,18 @@ def _generate_KS_cube():
                 cdf = lambda x: pareto.cdf(x, aML)
                 D.append(kstest(rvs, cdf)[0])
             Dcube[i,j] = np.sort(D)
-    np.save(_path_ks_grid, np.array(a_grid, n_grid, Dcube))
+    np.save(_path_ks_grid, np.array((a_grid, n_grid, Dcube)))
+
+
+def KS_MC(a, n_events, n_draws=10000):
+    D = []
+    for _ in range(n_draws):
+        rvs = pareto.rvs(a, size=n_events)
+        aML = ML_index_analytic(rvs, 1.)
+        cdf = lambda x: pareto.cdf(x, aML)
+        D.append(kstest(rvs, cdf)[0])
+    return  np.sort(D)
+
 
 _KS_MCMC_ary = np.load(_path_ks_grid)
 _n = _KS_MCMC_ary[2].shape[-1]
@@ -567,5 +579,11 @@ _cp_grid = (np.arange(_n) + 0.5)/_n
 def KS_Dcrit(a, n, p):
     a_grid, n_grid, Dcube = _KS_MCMC_ary
     return interpn((a_grid, n_grid, _cp_grid), Dcube, (a, n, 1-p))
+
+
+def  KS_p(a, n, D, n_draws=10000):
+    Dmc = KS_MC(a, n, n_draws)
+    i = np.searchsorted(Dmc, D)
+    return 1 - float(i)/n_draws
 
 
