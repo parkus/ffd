@@ -446,7 +446,7 @@ def loglike_from_hist(bins, counts):
     return loglike
 
 
-def cumulative_frequency(a, C, e):
+def cumulative_frequency(a, C, e, eref=1):
     """
     Cumulative frequency of events with energies (or other metric) greater than e for a power-law of the form
 
@@ -454,10 +454,10 @@ def cumulative_frequency(a, C, e):
 
     to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
     """
-    return C*e**-a
+    return C*(e/eref)**-a
 
 
-def differential_frequency(a, C, e):
+def differential_frequency(a, C, e, eref=1):
     """
     Differential frequency of events with energies (or other metric) greater than e for a power-law of the form
 
@@ -465,10 +465,10 @@ def differential_frequency(a, C, e):
 
     to the flare energy distribution, where f is the cumulative frequency of flares with energies greater than e.
     """
-    return a*C*e**(-a-1)
+    return a*C*(e/eref)**(-a-1)
 
 
-def time_average(a, C, emin, emax):
+def time_average(a, C, emin, emax, eref=1):
     """
     Average output of events with energies in the range [emin, emax] for a power-law of the form
 
@@ -479,17 +479,17 @@ def time_average(a, C, emin, emax):
     If the power law is for flare equivalent durations, this amounts to the ratio of energy output in flares versus
     quiesence. If the power law is for flare energies, it is the time-averaged energy output of flares (units of power).
     """
-    return a * C / (1 - a) * (emax ** (1 - a) - emin ** (1 - a))
+    return a * C / (1 - a) * ((emax/eref) ** (1 - a) - (emin/eref) ** (1 - a))
 
 
-def energy(a, C, f):
+def energy(a, C, f, eref=1):
     """
     Minimum energy (or other metric given as e below) of events that occur with a frequency of f for a cumulative
     frequency distribution of the form
 
     f = C*e**-a.
     """
-    return (f/C)**(1/-a)
+    return (f/C)**(1/-a)*eref
 
 
 def plot(a, C, emin, emax, *args, **kwargs):
@@ -513,8 +513,9 @@ def plot(a, C, emin, emax, *args, **kwargs):
     -------
     line : matplotlib line object
     """
+    eref = kwargs.pop('eref', 1)
     ax = kwargs.pop('ax', plt.gca())
-    fmin, fmax = [cumulative_frequency(a, C, e) for e in  [emin, emax]]
+    fmin, fmax = [cumulative_frequency(a, C, e, eref) for e in  [emin, emax]]
     return ax.plot([emin, emax], [fmin, fmax], *args, **kwargs)[0]
 
 
