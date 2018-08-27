@@ -40,7 +40,7 @@ class PowerLawFit(object):
                 limit_scale = scale_limits
             else:
                 limit_scale = 1.
-                e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'power')
+                e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'event')
                 possible_scales = e/elim
                 possible_scales = possible_scales[possible_scales > 1]
                 possible_scales = np.sort(possible_scales)
@@ -118,7 +118,7 @@ class PowerLawFit(object):
 
     def _make_sampler(self, nwalkers, Cscale='log', limit_scale=1, include_errors=False, rate_only=False):
         # make vectors of events, exposure times, and detection limits
-        Fe, Ferr, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'power')
+        Fe, Ferr, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'event')
 
         # first handle the power law portion of the likelihood
         if rate_only:
@@ -129,7 +129,7 @@ class PowerLawFit(object):
                 return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
         # next handle the poisson portion of the likelihood
-        e, err, elim, expt, n = self._get_data_vecs(limit_scale, 'poiss')
+        e, err, elim, expt, n = self._get_data_vecs(limit_scale, 'obs')
         def loglike_poisson(a_cum, logC):
             # sometimes the MCMC sampler tries values for logC that are so low that 10**logC = 0 to computer precision
             # keeping lambda in log space avoids this resulting in a nan likelihood resulting from a np.log(0) operation
@@ -255,7 +255,7 @@ class PowerLawFit(object):
         return sampler, pos, loglike
 
 
-    def index_analytic(self, limit_scale=None, _data_vecs=None):
+    def index_analytic(self, limit_scale=None, _event_vecs=None):
         """
         Returns a quick-and-dirty max-likelihood power law fit of the form
 
@@ -268,15 +268,15 @@ class PowerLawFit(object):
         a : float
             max likelihood power-law index
         """
-        data_vecs = self._get_data_vecs(limit_scale, 'power') if _data_vecs is None else _data_vecs
-        e, err, elim, expt, n = data_vecs
+        event_vecs = self._get_data_vecs(limit_scale, 'event') if _event_vecs is None else _event_vecs
+        e, err, elim, expt, n = event_vecs
         N = len(e)
         a = N / (np.sum(np.log(e / elim)))
         a = (N-1)*a/N # corrects for bias per Crawford+ 1970
         return a
 
 
-    def _get_data_vecs(self, limit_scale=None, power_or_poiss='power'):
+    def _get_data_vecs(self, limit_scale=None, by_obs_or_event='event'):
         if limit_scale is None:
             limit_scale = 1.
         expt, e, elim, n, err = [], [], [], [], []
@@ -285,7 +285,7 @@ class PowerLawFit(object):
             keep = obs.e > _elim
             _e = obs.e[keep]
             _n = len(_e)
-            fac = _n if power_or_poiss == 'power' else 1
+            fac = _n if by_obs_or_event == 'event' else 1
             e.append(_e)
             _err = obs.e_err
             if _err is not None:
@@ -298,19 +298,19 @@ class PowerLawFit(object):
         return map(np.concatenate, (e, err, elim, expt, n))
 
 
-    def _combined_normfac(self, a, limit_scale=None, data_vecs=None):
-        if data_vecs is None:
-            data_vecs = self._get_data_vecs(limit_scale, 'poiss')
-        e, err, elim, expt, n = data_vecs
+    def _combined_normfac(self, a, limit_scale=None, obs_data=None):
+        if obs_data is None:
+            obs_data = self._get_data_vecs(limit_scale, 'obs')
+        e, err, elim, expt, n = obs_data
         return a / np.sum(expt * elim**-a)
 
 
-    def combined_CDF(self, e, a, limit_scale=None, data_vecs=None):
+    def combined_CDF(self, e, a, limit_scale=None, obs_data=None):
         e = np.reshape(e, [-1])
-        if data_vecs is None:
-            data_vecs = self._get_data_vecs(limit_scale, 'poiss')
-        normfac = self._combined_normfac(a, limit_scale, data_vecs=data_vecs)
-        _, _, elim, expt, _ = data_vecs
+        if obs_data is None:
+            obs_data = self._get_data_vecs(limit_scale, 'obs')
+        normfac = self._combined_normfac(a, limit_scale, obs_data=obs_data)
+        _, _, elim, expt, _ = obs_data
         keep = elim[None,:] < e[:, None]
         bad = e <= 0
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -319,24 +319,87 @@ class PowerLawFit(object):
         return result
 
 
-    def PP(self, a, limit_scale=None):
-        data_vecs = self._get_data_vecs(limit_scale, 'poiss')
-        e, err, elim, expt, n = data_vecs
+    def rvs(self, a, n, obs_data=None, limit_scale=None, exact_replica=False, event_data=None):
+        if exact_replica:
+            if event_data is None:
+                event_data = self._get_data_vecs(limit_scale, 'event')
+            n = self.flare_dataset.n_total
+            elims = event_data[2]
+            rvs_pow = random_energies(a, elims, np.inf, n)
+        else:
+            if obs_data is None:
+                obs_data = self._get_data_vecs(limit_scale, 'obs')
+            rvs_uni = np.random.uniform(0, 1, n)
+            normfac = self._combined_normfac(a, limit_scale, obs_data=obs_data)
+            _, _, elim, expt, _ = obs_data
+            Plims = self.combined_CDF(elim, a, limit_scale=limit_scale, obs_data=obs_data)
+            sum_over = Plims[None,:] < rvs_uni[:,None]
+            rvs_pow = ((np.sum((expt*elim**-a)[None,:]*sum_over,1) - a/normfac*rvs_uni)/np.sum(expt[None,:]*sum_over,1))**(-1./a)
+        return rvs_pow
+
+
+    def PP(self, a, e=None, limit_scale=None):
+        obs_data = self._get_data_vecs(limit_scale, 'obs')
+        if e is None:
+            e = obs_data[0]
         e = np.sort(e)
-        p_analytic = self.combined_CDF(e, a, limit_scale, data_vecs)
+        p_analytic = self.combined_CDF(e, a, limit_scale, obs_data)
         n = len(e)
         p_empirical = (np.arange(n) + 0.5)/n
         return p_analytic, p_empirical
 
 
-    def stabilized_PP(self, a, limit_scale=None):
-        return [2/np.pi*np.arcsin(np.sqrt(p)) for p in self.PP(self, a, limit_scale)]
+    def stabilized_PP(self, a, e=None, limit_scale=None):
+        return [2/np.pi*np.arcsin(np.sqrt(p)) for p in self.PP(a, e, limit_scale)]
+
+
+    def goodness_of_fit(self, a, limit_scale=None, maxMCtrials=10000, rel_perr=0.3, method='stabilized KS'):
+        """Compute p-value of stabilized KS test where a power-law with index a is the null hypothesis, so low values
+        of p mean the fit is poor. This is computationally intesnse because p is computed based on Monte-Carlo trials."""
+        obs_data = self._get_data_vecs(limit_scale, 'obs')
+        n = self.flare_dataset.n_total
+
+        if method == 'stabilized KS':
+            def get_stat(e):
+                ppx, ppy = self.stabilized_PP(a, e, limit_scale=limit_scale)
+                return np.max(np.abs(ppy - ppx))
+
+        if method == 'anderson-darling':
+            def get_stat(e):
+                ppx, ppy = self.PP(a, e, limit_scale=limit_scale)
+                return -len(ppy) - np.sum(2 * ppy * (np.log(ppx) + np.log(1 - ppx[::-1])))
+
+        stat = get_stat(None)
+
+        count = 0
+        stat_mc = []
+        def get_p():
+            n = np.sum(stat_mc > stat)
+            m = float(len(stat_mc))
+            p = n/m
+            perr = np.sqrt(n)/m
+            return p, perr
+        while True:
+            if count > maxMCtrials:
+                break
+            e_rvs = self.rvs(a, n, obs_data=obs_data)
+            stat_mc.append(get_stat(e_rvs))
+            if count >= 1000 and count % 100 == 0:
+                p, perr = get_p()
+                with np.errstate(invalid='ignore'):
+                    if perr/p < rel_perr:
+                        break
+            count += 1
+
+        return get_p()
+
+
 
 
     def KS_test(self, a, limit_scale=None, alternative='two-sided', mode='approx'):
-        data_vecs = self._get_data_vecs(limit_scale, 'poiss')
-        CDF = lambda e: self.combined_CDF(e, a, limit_scale, data_vecs)
-        e = data_vecs[0]
+        obs_data = self._get_data_vecs(limit_scale, 'obs')
+        CDF = lambda e: self.combined_CDF(e, a, limit_scale, obs_data)
+        e = obs_data[0]
         D = kstest(e, CDF, alternative=alternative, mode=mode)[0]
         n = len(e)
         return D, n
@@ -547,6 +610,7 @@ def ML_index_analytic(x, xlim):
 
 
 _path_ks_grid = os.path.join(os.path.dirname(__file__), 'power_KS_cube.npy')
+_path_ad_grid = os.path.join(os.path.dirname(__file__), 'power_AD_cube.npy')
 def _generate_KS_cube():
     a_grid = np.arange(0.2, 2, 0.05)
     n_grid = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
@@ -562,6 +626,37 @@ def _generate_KS_cube():
                 D.append(kstest(rvs, cdf)[0])
             Dcube[i,j] = np.sort(D)
     np.save(_path_ks_grid, np.array((a_grid, n_grid, Dcube)))
+
+
+def SKS_test():
+    pass
+
+
+def _generate_SKS_cube():
+    a_grid = np.arange(0.2, 2, 0.05)
+    n_grid = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
+    m = 1000
+    Dcube = np.zeros([len(a_grid), len(n_grid), m], dtype='f4')
+    for i, a in enumerate(a_grid):
+        for j, n in enumerate(n_grid):
+            D = []
+            for k in range(m):
+                rvs = pareto.rvs(a, size=n)
+                aML = ML_index_analytic(rvs, 1.)
+                cdf = lambda x: pareto.cdf(x, aML)
+                D.append(kstest(rvs, cdf)[0])
+            Dcube[i,j] = np.sort(D)
+    np.save(_path_ks_grid, np.array((a_grid, n_grid, Dcube)))
+
+
+def SKS_MC(a, n_events, n_draws=10000):
+    A = []
+    for _ in range(n_draws):
+        rvs = pareto.rvs(a, size=n_events)
+        aML = ML_index_analytic(rvs, 1.)
+        cdf = lambda x: pareto.cdf(x, aML)
+        D.append(kstest(rvs, cdf)[0])
+    return np.sort(D)
 
 
 def KS_MC(a, n_events, n_draws=10000):
