@@ -7,6 +7,7 @@ from warnings import warn
 from scipy.stats import kstest, pareto
 from scipy.interpolate import interpn
 import os
+from copy import deepcopy
 
 
 class PowerLawFit(object):
@@ -298,6 +299,17 @@ class PowerLawFit(object):
         return map(np.concatenate, (e, err, elim, expt, n))
 
 
+    def replace_energies(self, new_energies):
+        """For MC testing."""
+        new_energies = list(new_energies)
+        new_fit = deepcopy(self)
+        for obs in new_fit.flare_dataset.observations:
+            n = len(obs.e)
+            obs.e = np.array(new_energies[:n])
+            new_energies = new_energies[n:]
+        return new_fit
+
+
     def _combined_normfac(self, a, limit_scale=None, obs_data=None):
         if obs_data is None:
             obs_data = self._get_data_vecs(limit_scale, 'obs')
@@ -360,21 +372,21 @@ class PowerLawFit(object):
         n = self.flare_dataset.n_total
 
         if method == 'stabilized KS':
-            def get_stat(e):
+            def get_stat(a, e):
                 ppx, ppy = self.stabilized_PP(a, e, limit_scale=limit_scale)
                 return np.max(np.abs(ppy - ppx))
 
         if method == 'anderson-darling':
-            def get_stat(e):
+            def get_stat(a, e):
                 ppx, ppy = self.PP(a, e, limit_scale=limit_scale)
                 return -len(ppy) - np.sum(2 * ppy * (np.log(ppx) + np.log(1 - ppx[::-1])))
 
-        stat = get_stat(None)
+        stat = get_stat(a, None)
 
         count = 0
         stat_mc = []
         def get_p():
-            n = np.sum(stat_mc > stat)
+            n = np.sum(np.asarray(stat_mc) > stat)
             m = float(len(stat_mc))
             p = n/m
             perr = np.sqrt(n)/m
@@ -382,8 +394,11 @@ class PowerLawFit(object):
         while True:
             if count > maxMCtrials:
                 break
-            e_rvs = self.rvs(a, n, obs_data=obs_data)
-            stat_mc.append(get_stat(e_rvs))
+            e_rvs = self.rvs(a, n, obs_data=obs_data, exact_replica=True)
+            newfit = self.replace_energies(e_rvs)
+            newfit._make_sampler(10)
+            a = newfit.ml_result.x[0]
+            stat_mc.append(get_stat(a, e_rvs))
             if count >= 1000 and count % 100 == 0:
                 p, perr = get_p()
                 with np.errstate(invalid='ignore'):
@@ -392,8 +407,6 @@ class PowerLawFit(object):
             count += 1
 
         return get_p()
-
-
 
 
     def KS_test(self, a, limit_scale=None, alternative='two-sided', mode='approx'):
