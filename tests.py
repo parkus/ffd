@@ -1,5 +1,5 @@
 import powerlaw
-import ffd
+import data_structures
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -9,8 +9,8 @@ def simple_ffd(a_true=1., emin=1., emax=100., n_events=10, n_trials=1000):
     a = []
     for _ in range(n_trials):
         e = powerlaw.random_energies(a_true, emin, emax, n_events)
-        obs = ffd.Observation(emin, 1.0, e)
-        set = ffd.FlareDataset([obs])
+        obs = data_structures.Observation(emin, 1.0, e)
+        set = data_structures.FlareDataset([obs])
         fit = powerlaw.PowerLawFit(set, nwalkers=10, nsteps=1)
         a.append(fit.a_best)
 

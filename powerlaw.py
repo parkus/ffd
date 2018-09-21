@@ -11,6 +11,33 @@ from copy import deepcopy
 
 
 class PowerLawFit(object):
+    """
+    A PowerLawFit packages up a power-law fit to flares with the flare data and convenient tools for those fits,
+    while attempting to handle some of the nuances of the fitting process. The fit is of the form
+
+    f = C*e**-a,
+
+    where f is the cumulative frequency of flares with energies greater than e.
+
+    Attributes
+    ----------
+    flare_dataset : FlareDataset
+        The flare data.
+    a_logprior : function
+        The prior on a, if any. Should take a single value as
+        input and return ln(likelihood) of that value.
+    logC_logprior : function
+        As with a.
+    n : int
+        Total number of detected flares.
+    a : array
+        MCMC-sampled values of the power-law index.
+    C : array
+        MCMC-sampled values of the power-law rate constant.
+    logC : array
+        MCMC-sampled of the values of the natural log of the power-law rate constant.
+
+    """
 
     def __init__(self, flare_dataset, a_logprior=None, logC_logprior=None,
                  scale_limits=False, rate_only=False, fit=True, nwalkers=100, nsteps=100):
@@ -21,13 +48,46 @@ class PowerLawFit(object):
         f = C*e**-a,
 
         where f is the cumulative frequency of flares with energies greater than e.
+
+        Parameters
+        ----------
+        flare_dataset : FlareDataset
+            Flare data as an ffd.FlareDataset object.
+        a_logprior : function
+            The prior on a, if any. Should take a single value as input
+            and return ln(likelihood) of that value.
+        logC_logprior : function
+            As with a.
+        scale_limits : False, True, or float
+            If for some reason you think you've underestimated the
+            detection limits, you can scale them up. Providing a
+            float will scale them all by that factor. Simply
+            specifying True will result in the object looking for the
+            lowest constant scaling factor that results in the data
+            passing a KS test for consistency with  a power law.
+            Biases abound here, so be cuatious.
+        rate_only : bool
+            If True, the sampler will not consider the likelihood of
+            the data given the sampled power law parameters.
+            Instead, it will only use the priors on a and logC and the
+            Poisson likelihood of observing the number of events to
+            constrain the posterior.
+        fit : bool
+            If False, do not attempt any MCMC sampling of the fit
+            when initializing the object. (Major time saver if all
+            you need is to use some  of the utilities.)
+        nwalkers : int
+            Number of MCMC walkers to use.
+        nsteps : int
+            Number of MCMC steps to take upon initialization.
         """
-        include_errors = flare_dataset.has_errors
+        # store attributes
         self.flare_dataset = flare_dataset
         self.a_logprior = _prior_boilerplate(a_logprior)
         self.logC_logprior = _prior_boilerplate(logC_logprior)
         self.n = flare_dataset.n_total
 
+        # check for sensible input
         if fit and self.n < 3 and a_logprior is None:
             raise ValueError('At least 3 flares required to attempt a fit unless you place a prior on a. '
                              'Several more than 3 will likely be required for said fit to converge.')
@@ -36,16 +96,20 @@ class PowerLawFit(object):
                  'derived quantities (such as flare rate), use only the linear values, not logC, and use them only to '
                  'constrain upper limits.')
 
-        if scale_limits is True:
+        if scale_limits:
             if type(scale_limits) is float:
                 limit_scale = scale_limits
             else:
+                # create a list of possible scaling factors based on clipping off successive least energetic events
+                # in the dataset
                 limit_scale = 1.
                 e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'event')
                 possible_scales = e/elim
                 possible_scales = possible_scales[possible_scales > 1]
                 possible_scales = np.sort(possible_scales)
                 possible_scales = iter(possible_scales)
+
+                # now run through these limits until a KS test for consistency with a power law is passed
                 while True:
                     try:
                         limit_scale = possible_scales.next()
@@ -68,8 +132,7 @@ class PowerLawFit(object):
         # MCMC sampler does wacky things. So I'll treat the two separately.
         if fit:
             Cscale = 'log' if self.n > 0 else 'linear'
-            sampler, pos, loglike = self._make_sampler(nwalkers, Cscale, limit_scale=limit_scale,
-                                                       include_errors=include_errors, rate_only=rate_only)
+            sampler, pos, loglike = self._make_sampler(nwalkers, Cscale, limit_scale=limit_scale,  rate_only=rate_only)
             self.loglike = loglike
 
             # run some throw-away burn-in MCMC steps
@@ -83,6 +146,7 @@ class PowerLawFit(object):
             self._MCMCsampler = sampler
         # endregion
 
+    #region properties
     @property
     def a(self):
         return self._MCMCsampler.flatchain[:,0]
@@ -100,24 +164,15 @@ class PowerLawFit(object):
             return np.log10(self._MCMCsampler.flatchain[:,1])
         else:
             return self._MCMCsampler.flatchain[:,1]
+    #endregion
 
-
-    def run_mcmc(self, nsteps):
+    #region boilerplate
+    def _make_sampler(self, nwalkers, Cscale='log', limit_scale=1, rate_only=False):
         """
-        Advance the MCMC sampling of the fit posterior by nsteps.
-        Parameters
-        ----------
-        nsteps : int
-            number of MCMC steps to take
-
-        Returns
-        -------
-
+        Initialize the MCMC sampler for the fit. This gets complicated since it samples C or logC according to whether
+        any events have been detected.
         """
-        self._MCMCsampler.run_mcmc(None, nsteps)
 
-
-    def _make_sampler(self, nwalkers, Cscale='log', limit_scale=1, include_errors=False, rate_only=False):
         # make vectors of events, exposure times, and detection limits
         Fe, Ferr, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'event')
 
@@ -147,7 +202,7 @@ class PowerLawFit(object):
         # space is very narrow and highly curved, and it seems MCMC just can't accurately feel its way around it.
         #
         # However, an exception is when there are no flares to constrain the flare rate. We will get to that.
-        def loglike(params, include_errors=include_errors):
+        def loglike(params):
             """
             Log likelihood of the posterior distribution for values a and logC for a power-law fit to the cumulative
             flare frequency distribution,
@@ -164,11 +219,7 @@ class PowerLawFit(object):
             loglike : scalar
                 ln(likelihood) of the model given the flare data
             """
-            if include_errors:
-                a_cum, logC = params[:2]
-                e_vec = params[2:]
-            else:
-                a_cum, logC = params
+            a_cum, logC = params
 
             # always enforce this general prior on a
             if a_cum <= 0:
@@ -179,10 +230,6 @@ class PowerLawFit(object):
 
             # next any priors
             result += self.a_logprior(a_cum) + self.logC_logprior(logC)
-
-            # finally, measurement uncertainty of the event energies
-            if include_errors:
-                result += loglike_nuissance(e_vec)
 
             return result
 
@@ -199,7 +246,7 @@ class PowerLawFit(object):
             # try to find max-likelihood values of a, logC using numerical minimization of -loglike
             # use 1/a instead of a as a parameter to avoid bias per Crawford+ 1970
             def neglike(params):
-                return -loglike(params, include_errors=False)
+                return -loglike(params)
             a_guess = self.index_analytic()
             if not 0 < a_guess < 2:
                 a_guess = 1.0
@@ -221,12 +268,8 @@ class PowerLawFit(object):
             for _ in range(nwalkers):
                 a = a_init + np.random.normal(0, 0.01)
                 logC = guess_logC(a_init) + np.random.normal(0, 0.2)
-                if include_errors:
-                    e_vec = Fe + np.random.normal(0, Ferr/10., size=len(Fe))
-                    pos.append([a, logC] + e_vec.tolist())
-                else:
-                    pos.append([a, logC])
-            ndim = 2 + len(Fe) if include_errors else 2
+                pos.append([a, logC])
+            ndim = 2
             sampler = emcee.EnsembleSampler(nwalkers, ndim, loglike)
 
         else: # no flares in dataset, sample in a,C space
@@ -256,28 +299,26 @@ class PowerLawFit(object):
         return sampler, pos, loglike
 
 
-    def index_analytic(self, limit_scale=None, _event_vecs=None):
+    def _get_data_vecs(self, limit_scale=None, by_obs_or_event='event'):
         """
-        Returns a quick-and-dirty max-likelihood power law fit of the form
+        Boilerplate code for getting data vectors that I seem to  use over and over.
 
-        f ~ e**-a
-
-        where f is the cumulative frequency of flares with energies greater than e.
+        Parameters
+        ----------
+        limit_scale : see init
+        by_obs_or_event : 'event' or 'obs'
+            If 'event', n, elim, and expt are copied for
+            each event. All returned vectors are then the
+            same length, such that for each event energy
+            the number of flares, etc. in the observation
+            from which that event was detected can quickly
+            be accessed. If 'obs', n, elim, and expt are
+            simply aggregated from each observation.
 
         Returns
         -------
-        a : float
-            max likelihood power-law index
+        e, err, elim, expt, n
         """
-        event_vecs = self._get_data_vecs(limit_scale, 'event') if _event_vecs is None else _event_vecs
-        e, err, elim, expt, n = event_vecs
-        N = len(e)
-        a = N / (np.sum(np.log(e / elim)))
-        a = (N-1)*a/N # corrects for bias per Crawford+ 1970
-        return a
-
-
-    def _get_data_vecs(self, limit_scale=None, by_obs_or_event='event'):
         if limit_scale is None:
             limit_scale = 1.
         expt, e, elim, n, err = [], [], [], [], []
@@ -299,8 +340,58 @@ class PowerLawFit(object):
         return map(np.concatenate, (e, err, elim, expt, n))
 
 
+    def _combined_normfac(self, a, limit_scale=None, obs_data=None):
+
+        if obs_data is None:
+            obs_data = self._get_data_vecs(limit_scale, 'obs')
+        e, err, elim, expt, n = obs_data
+        return a / np.sum(expt * elim**-a)
+    #endregion
+
+
+    def run_mcmc(self, nsteps):
+        """
+        Advance the MCMC sampling of the fit posterior by nsteps.
+        Parameters
+        ----------
+        nsteps : int
+            number of MCMC steps to take
+
+        Returns
+        -------
+        None, done in-place.
+        """
+        self._MCMCsampler.run_mcmc(None, nsteps)
+
+
+    def index_analytic(self, limit_scale=None, _event_vecs=None):
+        """
+        Returns a max-likelihood power law fit of the form
+
+        f ~ e**-a
+
+        where f is the cumulative frequency of flares with energies greater than e.
+
+        The fit is corrected for the known bias in the ML parameter for a. See Crawford+ 1970.
+
+        Returns
+        -------
+        a : float
+            max likelihood power-law index
+        """
+        event_vecs = self._get_data_vecs(limit_scale, 'event') if _event_vecs is None else _event_vecs
+        e, err, elim, expt, n = event_vecs
+        N = len(e)
+        a = N / (np.sum(np.log(e / elim)))
+        a = (N-1)*a/N # corrects for bias per Crawford+ 1970
+        return a
+
+
     def replace_energies(self, new_energies):
-        """For MC testing."""
+        """For MC testing. This allows a new fit object to be produced where the energies of the events have been
+        changed and that is all. I made it to use so I could fit simulated datasets identical to the true dataset
+        in every other way then compute D for the KS test from these simulated data, ultimately so that I could
+        compute good p-values for the KS test."""
         new_energies = list(new_energies)
         new_fit = deepcopy(self)
         for obs in new_fit.flare_dataset.observations:
@@ -308,13 +399,6 @@ class PowerLawFit(object):
             obs.e = np.array(new_energies[:n])
             new_energies = new_energies[n:]
         return new_fit
-
-
-    def _combined_normfac(self, a, limit_scale=None, obs_data=None):
-        if obs_data is None:
-            obs_data = self._get_data_vecs(limit_scale, 'obs')
-        e, err, elim, expt, n = obs_data
-        return a / np.sum(expt * elim**-a)
 
 
     def combined_CDF(self, e, a, limit_scale=None, obs_data=None):
@@ -331,13 +415,45 @@ class PowerLawFit(object):
         return result
 
 
-    def rvs(self, a, n, obs_data=None, limit_scale=None, exact_replica=False, event_data=None):
+    def rvs(self, a, n, limit_scale=None, exact_replica=False, obs_data=None, event_data=None):
+        """
+        Generate random values based on a power law describing several datasets with the same detection limits as the
+        data underlying the PowerLawFit object.
+
+        Parameters
+        ----------
+        a : float
+            index for cumulative distribution
+        n : int
+            number of events to draw
+        limit_scale : float, optional
+            Factor by which to scale the detection limits.
+        exact_replica : bool
+            If True, return exactly the same number of events for each
+            observation. In this case, n is ignored. If False, the
+            randomly generated events can come from any of the
+            observations.
+        obs_data  :  list, optional
+            data from the observations. Comes from
+            self._get_data_vecs(False, 'obs'). This is just here so the
+            user can speed things up if this method is being called
+            many times.
+        event_data
+            data from the events. Comes from
+            self._get_data_vecs(False, 'event'). This is just here so the
+            user can speed things up if this method is being called
+            many times.
+        Returns
+        -------
+        rvs : array
+            Randomly-generated values for event energies.
+        """
         if exact_replica:
             if event_data is None:
                 event_data = self._get_data_vecs(limit_scale, 'event')
             n = self.flare_dataset.n_total
             elims = event_data[2]
-            rvs_pow = random_energies(a, elims, np.inf, n)
+            rvs = random_energies(a, elims, np.inf, n)
         else:
             if obs_data is None:
                 obs_data = self._get_data_vecs(limit_scale, 'obs')
@@ -346,11 +462,32 @@ class PowerLawFit(object):
             _, _, elim, expt, _ = obs_data
             Plims = self.combined_CDF(elim, a, limit_scale=limit_scale, obs_data=obs_data)
             sum_over = Plims[None,:] < rvs_uni[:,None]
-            rvs_pow = ((np.sum((expt*elim**-a)[None,:]*sum_over,1) - a/normfac*rvs_uni)/np.sum(expt[None,:]*sum_over,1))**(-1./a)
-        return rvs_pow
+            rvs = ((np.sum((expt*elim**-a)[None,:]*sum_over,1) - a/normfac*rvs_uni)/np.sum(expt[None,:]*sum_over,1))**(-1./a)
+        return rvs
 
 
+    #region goodness of fit utilities
     def PP(self, a, e=None, limit_scale=None):
+        """
+        Compute percentile-percentile values comparing analytic CDF and empirical CDF. If the two distributions match
+        exactly (i.e. the data exactly follow a power-law distribution), then the returned values would  describe a
+        straight line with slope of 1.
+
+        Parameters
+        ----------
+        a : float
+            Index of cumulative power-law.
+        e : array, optional
+            Energies at which to compute the PP values. If None,
+            the actual event energies are used.
+        limit_scale : float, optional
+            Factor by which to scale detection limits.
+
+        Returns
+        -------
+        p_analytic, p_empirical : arrays
+            Percentiles from the analytic distribution and the empirical data.
+        """
         obs_data = self._get_data_vecs(limit_scale, 'obs')
         if e is None:
             e = obs_data[0]
@@ -362,35 +499,101 @@ class PowerLawFit(object):
 
 
     def stabilized_PP(self, a, e=None, limit_scale=None):
+        """
+        Compute a stabilized version of the PP values, intended to be more sensitive to deviations in the tail of the
+        distribution.
+
+        This is just 2/pi * arcsin(sqrt(p)) for the values returned from PP(). See Maschberger & Kroupa 2009.
+
+        Parameters
+        ----------
+        a : float
+            Index of cumulative power-law.
+        e : array, optional
+            Energies at which to compute the PP values. If None,
+            the actual event energies are used.
+        limit_scale : float, optional
+            Factor by which to scale detection limits.
+
+        Returns
+        -------
+        p_analytic, p_empirical : arrays
+            "Stabilized" percentiles from the analytic distribution and the empirical data.
+        """
         return [2/np.pi*np.arcsin(np.sqrt(p)) for p in self.PP(a, e, limit_scale)]
 
 
     def goodness_of_fit(self, a, limit_scale=None, maxMCtrials=10000, rel_perr=0.3, method='stabilized KS'):
-        """Compute p-value of stabilized KS test where a power-law with index a is the null hypothesis, so low values
-        of p mean the fit is poor. This is computationally intesnse because p is computed based on Monte-Carlo trials."""
+        """
+        Test for power-law behavior.
+
+        This is computationally intense because p is computed based on Monte-Carlo trials. However, only as many MC
+        trials are run as is needed to achieve (approximately) the desired relative precision on the p-value.
+
+        Parameters
+        ----------
+        a : float
+            Index of cumulative power-law.
+        limit_scale : float, optional
+            Factor by which to scale detection limits.
+        maxMCtrials : int
+            Maximum number of Monte-Carlo trials allowed before
+            process is terminated.
+        rel_perr : float
+            Desired relative precision in the p-value. E.g., 0.1
+            means that for a p-value of 0.01, the  process will
+            halt once the error on that p-value is roughly 0.001.
+            Hence, you will probably be comfortable with a relatively
+            large value.
+        method : "stabilized KS" or "anderson-darling"
+            Statistic to use for assesing fit. See Maschberger & Kroupa 2009.
+            "stabilized KS" is recommended as being more sensitive
+            to deviations from power-law behavior in the tail of the
+            distribution.
+
+        Returns
+        -------
+        p : float
+            The probability that randomly-generated data from power-laws
+            that is then fit with its own power law would yield a
+            test statistic indicating a worse fit than the actual
+            data. Low values of p mean the fit is poor (i.e. random
+            data from a true power-law rarely produced fits as bad
+            as the actual data).
+        p_uncertainty : float
+            Estimated uncertainty on p.
+
+        """
+
+        # get some variables
         obs_data = self._get_data_vecs(limit_scale, 'obs')
         n = self.flare_dataset.n_total
 
+        # define function for computing  test statistic
         if method == 'stabilized KS':
             def get_stat(a, e):
                 ppx, ppy = self.stabilized_PP(a, e, limit_scale=limit_scale)
                 return np.max(np.abs(ppy - ppx))
-
         if method == 'anderson-darling':
             def get_stat(a, e):
                 ppx, ppy = self.PP(a, e, limit_scale=limit_scale)
                 return -len(ppy) - np.sum(2 * ppy * (np.log(ppx) + np.log(1 - ppx[::-1])))
 
+        # compute test statistic for actual dataset
         stat = get_stat(a, None)
 
-        count = 0
-        stat_mc = []
+        # define function for computing p-value and estimated uncertainty
         def get_p():
             n = np.sum(np.asarray(stat_mc) > stat)
             m = float(len(stat_mc))
             p = n/m
             perr = np.sqrt(n)/m
             return p, perr
+
+        # now generate random data, fit a power-law to that data, and compute the test statistic for it
+        # periodically compute the p-value and uncertainty and stop once the desired precision is reached
+        count = 0
+        stat_mc = []
         while True:
             if count > maxMCtrials:
                 break
@@ -410,12 +613,38 @@ class PowerLawFit(object):
 
 
     def KS_test(self, a, limit_scale=None, alternative='two-sided', mode='approx'):
+        """
+        Perform a Kolmogorov-Smirnov test for power-law behavior for the dataset.
+
+        Parameters
+        ----------
+        a : float
+            Index of cumulative power-law.
+        limit_scale : float, optional
+            Factor by which to scale detection limits.
+        alternative : "two-sided", "less", "greater"
+            Whether to consider devations on both sides, above,
+            or below a perfect 1-1 match of the theoretical and
+            empirical CDF.
+        mode : "approx" or "asymp"
+            How to compute test statistic (see scipy.stats.kstest docs).
+
+        Returns
+        -------
+        D : float
+            Test statistic (max distance between theoretical and empirical
+            CDFs).
+        n : int
+            Number of data points (i.e. number of flares). D and n are
+            needed to compute a p-value for the test.
+        """
         obs_data = self._get_data_vecs(limit_scale, 'obs')
         CDF = lambda e: self.combined_CDF(e, a, limit_scale, obs_data)
         e = obs_data[0]
         D = kstest(e, CDF, alternative=alternative, mode=mode)[0]
         n = len(e)
         return D, n
+    #endregion
 
 
     def plotfit(self, ax=None, line_kws=None, step_kws=None):
@@ -489,35 +718,6 @@ def loglike_from_interval(interval):
             return -np.inf
         else:
             return 0.0
-
-    return loglike
-
-
-def loglike_from_hist(bins, counts):
-    """
-    Create a function to represent a likelihood function based on histogrammed values.
-
-    Parameters
-    ----------
-    bins : bin edges used in the histogram.
-    counts : counts in each bin (histogram will be normalized such that integral is 1, though it shouldn't really matter)
-
-    Returns
-    -------
-    loglike : function
-        A function loglike(x) that returns ln(likelihood(x)) based on the value of the input histogram at x.
-    """
-
-    integral = np.sum(np.diff(bins)*counts)
-    norm = counts/integral
-
-    def loglike(x):
-        if x <= bins[0]:
-            return -np.inf
-        if x >= bins[-1]:
-            return -np.inf
-        i = np.searchsorted(bins, x)
-        return np.log(norm[i - 1])
 
     return loglike
 
@@ -596,6 +796,26 @@ def plot(a, C, emin, emax, *args, **kwargs):
 
 
 def random_energies(a, emin, emax, n):
+    """
+    Generate random values for event energies from a power-law distribution where probability of an event with
+    energy greater than e is proportional to e**-a.
+
+    Parameters
+    ----------
+    a : float
+        Cumulative index of power-law.
+    emin : float
+        Minimum event energy.
+    emax : float
+        Maximum event energy.
+    n : int
+        Number of events to draw.
+
+    Returns
+    -------
+    energies : array
+        Randomly-drawn energies.
+    """
     # I found it easier to just make my own than figure out the numpy power, pareto, etc. random number generators
     norm = emin**-a - emax**-a
     x_from_cdf = lambda c: ((1-c)*norm + emax**-a)**(-1/a)
@@ -622,9 +842,12 @@ def ML_index_analytic(x, xlim):
     return a
 
 
+#region KS test stuff
 _path_ks_grid = os.path.join(os.path.dirname(__file__), 'power_KS_cube.npy')
-_path_ad_grid = os.path.join(os.path.dirname(__file__), 'power_AD_cube.npy')
 def _generate_KS_cube():
+    """
+    Generate a grid of D values for KS tests of power-law behavior.
+    """
     a_grid = np.arange(0.2, 2, 0.05)
     n_grid = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
     m = 1000
@@ -639,40 +862,13 @@ def _generate_KS_cube():
                 D.append(kstest(rvs, cdf)[0])
             Dcube[i,j] = np.sort(D)
     np.save(_path_ks_grid, np.array((a_grid, n_grid, Dcube)))
-
-
-def SKS_test():
-    pass
-
-
-def _generate_SKS_cube():
-    a_grid = np.arange(0.2, 2, 0.05)
-    n_grid = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
-    m = 1000
-    Dcube = np.zeros([len(a_grid), len(n_grid), m], dtype='f4')
-    for i, a in enumerate(a_grid):
-        for j, n in enumerate(n_grid):
-            D = []
-            for k in range(m):
-                rvs = pareto.rvs(a, size=n)
-                aML = ML_index_analytic(rvs, 1.)
-                cdf = lambda x: pareto.cdf(x, aML)
-                D.append(kstest(rvs, cdf)[0])
-            Dcube[i,j] = np.sort(D)
-    np.save(_path_ks_grid, np.array((a_grid, n_grid, Dcube)))
-
-
-def SKS_MC(a, n_events, n_draws=10000):
-    A = []
-    for _ in range(n_draws):
-        rvs = pareto.rvs(a, size=n_events)
-        aML = ML_index_analytic(rvs, 1.)
-        cdf = lambda x: pareto.cdf(x, aML)
-        D.append(kstest(rvs, cdf)[0])
-    return np.sort(D)
 
 
 def KS_MC(a, n_events, n_draws=10000):
+    """
+    Run MC trials of computing KS D values for data draw from power law with cumulative index a.
+    """
+
     D = []
     for _ in range(n_draws):
         rvs = pareto.rvs(a, size=n_events)
@@ -686,13 +882,20 @@ _KS_MCMC_ary = np.load(_path_ks_grid)
 _n = _KS_MCMC_ary[2].shape[-1]
 _cp_grid = (np.arange(_n) + 0.5)/_n
 def KS_Dcrit(a, n, p):
+    """
+    Compute D value associated with a p-value  of p for a dataset of n events drawn from a power law distribution with
+    cumulative index a.
+    """
     a_grid, n_grid, Dcube = _KS_MCMC_ary
     return interpn((a_grid, n_grid, _cp_grid), Dcube, (a, n, 1-p))
 
-
-def  KS_p(a, n, D, n_draws=10000):
+def KS_p(a, n, D, n_draws=10000):
+    """
+    Estimate p-value for a KS test D value D for n events drawn from  a power-law distribtuion with index a using
+    n_draws MC trials.
+    """
     Dmc = KS_MC(a, n, n_draws)
     i = np.searchsorted(Dmc, D)
     return 1 - float(i)/n_draws
-
+#endregion
 

@@ -48,9 +48,6 @@ class FlareDataset(object):
         """
         self.observations = observations
 
-        # see if all the observations have errors on the event energies
-        self.has_errors = all([o.e_err is not None for o in observations])
-
         # totals
         self.n_total = sum([data.n for data in observations])
         self.expt_total = np.sum([data.expt for data in observations])
@@ -141,7 +138,7 @@ class Observation(object):
         Number of detected flares.
     """
 
-    def __init__(self, detection_limit, exposure_time, flare_energies=[], flare_energy_errors=None):
+    def __init__(self, detection_limit, exposure_time, flare_energies=[]):
         """
         Create an Observation object.
 
@@ -160,7 +157,6 @@ class Observation(object):
         self.elim = detection_limit
         self.expt = exposure_time
         self.e = np.array(flare_energies)
-        self.e_err = flare_energy_errors
         self.n = len(flare_energies)
 
 
