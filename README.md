@@ -87,8 +87,8 @@ plt.xlabel('Log10(C)')
 
 # get ML values and error bars of posterior distributions of a and C
 # use log space with C because it is more normally distributed that way
-error_bars(fit.a)
-error_bars(fit.logC)
+ffd.utils.error_bars(fit.a)
+ffd.utils.error_bars(fit.logC)
 
 # -----------
 # Example 2: Use a prior probability on the power-law index to constrain the
@@ -100,7 +100,7 @@ error_bars(fit.logC)
 
 # make a prior for a that returns the log likelihood of a given a value
 # (yes, I'm ignoring a constant offset)
-def a_prior(a):
+def a_logprior(a):
   return -(a - 0.7)**2/2/0.2**2
 
 # set the exposure time. This will change the constraint on flare rate, since
@@ -111,7 +111,7 @@ elim = 1.
 # do the fitting
 obs = ffd.Observation(expt, elim, [])
 dataset = ffd.FlareDataset([obs])
-fit = ffd.powerlaw.PowerLawFit(dataset, a_prior=a_prior, nwalkers=10, nsteps=1000)
+fit = ffd.powerlaw.PowerLawFit(dataset, a_logprior=a_logprior, nwalkers=10, nsteps=1000)
 
 # use the MCMC samples from the fit to sample the rate of >elim flares
 rate = fit.C * elim**-fit.a
@@ -124,3 +124,4 @@ bins = np.linspace(0, 1000./expt, 101)
 _ = plt.hist(rate, bins)
 plt.xlabel('Rate of >elim Flares')
 np.percentile(rate, 95)
+```
