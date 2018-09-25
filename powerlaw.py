@@ -373,8 +373,7 @@ class PowerLawFit(object):
         event_vecs = self._get_data_vecs(limit_scale, 'event') if _event_vecs is None else _event_vecs
         e, elim, expt, n = event_vecs
         N = len(e)
-        with np.errstate(invalid='raise'):
-            a = N / (np.sum(np.log(e / elim)))
+        a = N / (np.sum(np.log(e / elim)))
         a = (N-1)*a/N # corrects for bias per Crawford+ 1970
         return a
 
@@ -444,7 +443,7 @@ class PowerLawFit(object):
             if event_data is None:
                 event_data = self._get_data_vecs(limit_scale, 'event')
             n = self.flare_dataset.n_total
-            elims = event_data[2]
+            elims = event_data[1]
             rvs = random_energies(a, elims, np.inf, n)
         else:
             if obs_data is None:
