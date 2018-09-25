@@ -103,7 +103,7 @@ class PowerLawFit(object):
                 # create a list of possible scaling factors based on clipping off successive least energetic events
                 # in the dataset
                 limit_scale = 1.
-                e, _, elim, _, _ = self._get_data_vecs(limit_scale, 'event')
+                e, elim, _, _ = self._get_data_vecs(limit_scale, 'event')
                 possible_scales = e/elim
                 possible_scales = possible_scales[possible_scales > 1]
                 possible_scales = np.sort(possible_scales)
@@ -174,7 +174,7 @@ class PowerLawFit(object):
         """
 
         # make vectors of events, exposure times, and detection limits
-        Fe, Ferr, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'event')
+        Fe, Felim, Fexpt, Fn = self._get_data_vecs(limit_scale, 'event')
 
         # first handle the power law portion of the likelihood
         if rate_only:
@@ -185,16 +185,12 @@ class PowerLawFit(object):
                 return np.sum(np.log((a_diff - 1) / Felim) - a_diff * np.log(Fe / Felim))
 
         # next handle the poisson portion of the likelihood
-        e, err, elim, expt, n = self._get_data_vecs(limit_scale, 'obs')
+        e, elim, expt, n = self._get_data_vecs(limit_scale, 'obs')
         def loglike_poisson(a_cum, logC):
             # sometimes the MCMC sampler tries values for logC that are so low that 10**logC = 0 to computer precision
             # keeping lambda in log space avoids this resulting in a nan likelihood resulting from a np.log(0) operation
             loglam = np.log(expt) + logC*np.log(10.) - a_cum*np.log(elim)
             return np.sum(-np.e**loglam + n * loglam - gammaln(n + 1))
-
-        # now handle the "nuissance" likelihood of the event energies
-        def loglike_nuissance(e_vec):
-            return np.sum(-0.5*np.log(2*np.pi) - np.log(Ferr) - (e_vec - Fe)**2/2/Ferr**2)
 
         # all together now!
         # Define likelihood as a function of a,logC so that the MCMC sampler will explore that space.
@@ -317,11 +313,11 @@ class PowerLawFit(object):
 
         Returns
         -------
-        e, err, elim, expt, n
+        e, elim, expt, n
         """
         if limit_scale is None:
             limit_scale = 1.
-        expt, e, elim, n, err = [], [], [], [], []
+        expt, e, elim, n = [], [], [], []
         for obs in self.flare_dataset.observations:
             _elim = obs.elim * limit_scale
             keep = obs.e > _elim
@@ -329,22 +325,17 @@ class PowerLawFit(object):
             _n = len(_e)
             fac = _n if by_obs_or_event == 'event' else 1
             e.append(_e)
-            _err = obs.e_err
-            if _err is not None:
-                err.append(obs.e_err[keep])
-            else:
-                err.append([np.nan]*_n)
             n.append([_n] * fac)
             elim.append([_elim] * fac)
             expt.append([obs.expt] * fac)
-        return map(np.concatenate, (e, err, elim, expt, n))
+        return map(np.concatenate, (e, elim, expt, n))
 
 
     def _combined_normfac(self, a, limit_scale=None, obs_data=None):
 
         if obs_data is None:
             obs_data = self._get_data_vecs(limit_scale, 'obs')
-        e, err, elim, expt, n = obs_data
+        e, elim, expt, n = obs_data
         return a / np.sum(expt * elim**-a)
     #endregion
 
@@ -380,9 +371,10 @@ class PowerLawFit(object):
             max likelihood power-law index
         """
         event_vecs = self._get_data_vecs(limit_scale, 'event') if _event_vecs is None else _event_vecs
-        e, err, elim, expt, n = event_vecs
+        e, elim, expt, n = event_vecs
         N = len(e)
-        a = N / (np.sum(np.log(e / elim)))
+        with np.errstate(invalid='raise'):
+            a = N / (np.sum(np.log(e / elim)))
         a = (N-1)*a/N # corrects for bias per Crawford+ 1970
         return a
 
@@ -406,7 +398,7 @@ class PowerLawFit(object):
         if obs_data is None:
             obs_data = self._get_data_vecs(limit_scale, 'obs')
         normfac = self._combined_normfac(a, limit_scale, obs_data=obs_data)
-        _, _, elim, expt, _ = obs_data
+        _, elim, expt, _ = obs_data
         keep = elim[None,:] < e[:, None]
         bad = e <= 0
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -459,7 +451,7 @@ class PowerLawFit(object):
                 obs_data = self._get_data_vecs(limit_scale, 'obs')
             rvs_uni = np.random.uniform(0, 1, n)
             normfac = self._combined_normfac(a, limit_scale, obs_data=obs_data)
-            _, _, elim, expt, _ = obs_data
+            _, elim, expt, _ = obs_data
             Plims = self.combined_CDF(elim, a, limit_scale=limit_scale, obs_data=obs_data)
             sum_over = Plims[None,:] < rvs_uni[:,None]
             rvs = ((np.sum((expt*elim**-a)[None,:]*sum_over,1) - a/normfac*rvs_uni)/np.sum(expt[None,:]*sum_over,1))**(-1./a)
