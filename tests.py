@@ -1,5 +1,7 @@
-import powerlaw
-import data_structures
+from __future__ import division, print_function, absolute_import
+
+from . import powerlaw
+from . import data_structures
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -20,5 +22,5 @@ def simple_ffd(a_true=1., emin=1., emax=100., n_events=10, n_trials=1000):
     plt.axvline(a_true)
     plt.annotate('True Value', xy=(a_true, 0.05), xytext=(2,0), xycoords=('data', 'axes fraction'),
                  textcoords='offset points', rotation=90, ha='left', va='bottom')
-    print '(Median - True)/(error on mean) = {:.2f}'.format((np.median(a) - a_true)/(np.std(a)/np.sqrt(n_trials)))
+    print('(Median - True)/(error on mean) = {:.2f}'.format((np.median(a) - a_true)/(np.std(a)/np.sqrt(n_trials))))
     return a

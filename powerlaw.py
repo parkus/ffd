@@ -1,3 +1,5 @@
+from __future__ import division, print_function, absolute_import
+
 from matplotlib import pyplot as plt
 import numpy as np
 import emcee
@@ -112,7 +114,7 @@ class PowerLawFit(object):
                 # now run through these limits until a KS test for consistency with a power law is passed
                 while True:
                     try:
-                        limit_scale = possible_scales.next()
+                        limit_scale = next(possible_scales)
                     except StopIteration:
                         raise ValueError("No lower limit scaling could be found for which the data are consistent "
                                          "with a power law.")
@@ -328,7 +330,7 @@ class PowerLawFit(object):
             n.append([_n] * fac)
             elim.append([_elim] * fac)
             expt.append([obs.expt] * fac)
-        return map(np.concatenate, (e, elim, expt, n))
+        return list(map(np.concatenate, (e, elim, expt, n)))
 
 
     def _combined_normfac(self, a, limit_scale=None, obs_data=None):
