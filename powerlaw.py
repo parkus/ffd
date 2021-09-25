@@ -871,7 +871,7 @@ def KS_MC(a, n_events, n_draws=10000):
     return  np.sort(D)
 
 
-_KS_MCMC_ary = np.load(_path_ks_grid)
+_KS_MCMC_ary = np.load(_path_ks_grid, encoding='latin1', allow_pickle=True)
 _n = _KS_MCMC_ary[2].shape[-1]
 _cp_grid = (np.arange(_n) + 0.5)/_n
 def KS_Dcrit(a, n, p):
