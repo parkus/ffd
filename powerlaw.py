@@ -748,7 +748,7 @@ def time_average(a, C, emin, emax, eref=1):
     If the power law is for flare equivalent durations, this amounts to the ratio of energy output in flares versus
     quiesence. If the power law is for flare energies, it is the time-averaged energy output of flares (units of power).
     """
-    return a * C / (1 - a) * ((emax/eref) ** (1 - a) - (emin/eref) ** (1 - a))
+    return a * C / (1 - a) * eref * ((emax/eref) ** (1 - a) - (emin/eref) ** (1 - a))
 
 
 def energy(a, C, f, eref=1):
